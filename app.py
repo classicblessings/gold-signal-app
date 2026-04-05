@@ -1,227 +1,208 @@
-import streamlit as st
+from datetime import datetime, timezone, timedelta
 import pandas as pd
-import yfinance as yf
-import datetime
+import json
+import os
 
-st.set_page_config(layout="wide")
+# ================================
+# ⚙️ SETTINGS
+# ================================
 
-# ===== AUTO REFRESH =====
-st.markdown('<meta http-equiv="refresh" content="6">', unsafe_allow_html=True)
+MIN_CONFIDENCE = 95
+WAT_OFFSET = timedelta(hours=1)
+STATS_FILE = "pair_stats.json"
 
-# ===== STYLE =====
-st.markdown("""
-<style>
-.signal {
-    text-align:center;
-    font-size:55px;
-    font-weight:bold;
-    padding:25px;
-    border-radius:20px;
-}
-.buy {background:#00e676;color:#000;}
-.sell {background:#ff1744;color:#fff;}
-.wait {background:#1f2937;color:#aaa;}
-.card {
-    background:#111827;
-    padding:15px;
-    border-radius:15px;
-    margin-top:10px;
-}
-</style>
-""", unsafe_allow_html=True)
+ALL_PAIRS = [
+    "EURUSD","GBPUSD","USDJPY","USDCHF",
+    "AUDUSD","USDCAD","NZDUSD",
+    "EURJPY","GBPJPY","AUDJPY","CADJPY",
+    "EURGBP","EURAUD","EURCAD",
+    "GBPCHF","GBPAUD","GBPCAD",
+    "XAUUSD"
+]
 
-st.title("⚡ IQ OPTION FINAL BOSS AI (STABLE)")
+# ================================
+# ⏰ TIME + SESSION
+# ================================
 
-# ===== SETTINGS =====
-min_conf = st.slider("Min Confidence %", 85, 97, 92)
+def get_wat_time():
+    return datetime.now(timezone.utc) + WAT_OFFSET
 
-# ===== TIME =====
-now = datetime.datetime.utcnow()
-sec = now.second
+def get_session():
+    hour = get_wat_time().hour
 
-# ===== PAIRS =====
-pairs = ["EURUSD=X","GBPUSD=X","USDJPY=X","AUDUSD=X","USDCAD=X"]
+    if 8 <= hour < 11:
+        return "LONDON"
+    elif 14 <= hour < 17:
+        return "NEW_YORK"
+    elif 18 <= hour < 21:
+        return "EVENING"
+    return None
 
-# ===== DATA =====
-@st.cache_data(ttl=5)
-def get_data(symbol):
-    try:
-        df = yf.download(symbol, period="1d", interval="1m", progress=False)
-        if df is None or df.empty:
-            return None
-        return df.copy()
-    except:
+# ================================
+# 📰 NEWS FILTER (BASIC)
+# ================================
+
+def is_news_time():
+    # Avoid top of the hour (common news spikes)
+    minute = get_wat_time().minute
+    return minute < 5 or minute > 55
+
+# ================================
+# 📊 INDICATORS
+# ================================
+
+def rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.clip(lower=0).rolling(period).mean()
+    loss = -delta.clip(upper=0).rolling(period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+# ================================
+# 🕯️ CANDLE CONFIRMATION
+# ================================
+
+def is_bullish_engulfing(df):
+    c1, c2 = df.iloc[-2], df.iloc[-1]
+    return c1["close"] < c1["open"] and c2["close"] > c2["open"] and c2["close"] > c1["open"]
+
+def is_bearish_engulfing(df):
+    c1, c2 = df.iloc[-2], df.iloc[-1]
+    return c1["close"] > c1["open"] and c2["close"] < c2["open"] and c2["close"] < c1["open"]
+
+def rejection_wick(df):
+    last = df.iloc[-1]
+    body = abs(last["close"] - last["open"])
+    wick = last["high"] - last["low"]
+    return wick > body * 2  # strong rejection
+
+# ================================
+# ⏱️ EXPIRY LOGIC
+# ================================
+
+def get_expiry(df):
+    last_candle_size = abs(df.iloc[-1]["close"] - df.iloc[-1]["open"])
+
+    if last_candle_size > df["close"].std():
+        return "1m"  # strong move → quick entry
+    return "5m"      # slower trend
+
+# ================================
+# 📊 WIN RATE TRACKER
+# ================================
+
+def load_stats():
+    if os.path.exists(STATS_FILE):
+        with open(STATS_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_stats(stats):
+    with open(STATS_FILE, "w") as f:
+        json.dump(stats, f, indent=2)
+
+def get_win_rate(pair, stats):
+    if pair not in stats:
+        return 0.5
+    wins = stats[pair].get("wins", 0)
+    losses = stats[pair].get("losses", 0)
+    total = wins + losses
+    return wins / total if total > 0 else 0.5
+
+# ================================
+# 🧠 ANALYSIS ENGINE
+# ================================
+
+def analyze(pair, stats):
+
+    df = get_candles(pair)  # 🔥 CONNECT YOUR DATA HERE
+
+    if df is None or len(df) < 50:
         return None
 
-# ===== INDICATORS =====
-def compute(df):
-    df = df.copy()
-
-    df['MA5'] = df['Close'].rolling(5).mean()
-    df['MA20'] = df['Close'].rolling(20).mean()
-
-    delta = df['Close'].diff()
-    gain = delta.clip(lower=0).rolling(14).mean()
-    loss = -delta.clip(upper=0).rolling(14).mean()
-    rs = gain / loss
-    df['RSI'] = 100 - (100 / (1 + rs))
-
-    df['Momentum'] = df['Close'].diff(3)
-    df['Volatility'] = df['Close'].rolling(10).std()
-
-    df = df.dropna()
-
-    # FORCE CLEAN NUMERIC VALUES (FIX ERROR)
-    df = df.astype(float)
-
-    return df
-
-# ===== SIGNAL ENGINE (FIXED) =====
-def get_signal(df):
-    try:
-        last = df.iloc[-1]
-
-        ma5 = float(last['MA5'])
-        ma20 = float(last['MA20'])
-        momentum = float(last['Momentum'])
-        rsi = float(last['RSI'])
-        volatility = float(last['Volatility'])
-
-        score = 0
-
-        # TREND
-        if ma5 > ma20:
-            score += 2
-        else:
-            score -= 2
-
-        # MOMENTUM
-        score += 1 if momentum > 0 else -1
-
-        # RSI
-        if rsi < 25:
-            score += 2
-        elif rsi > 75:
-            score -= 2
-
-        # VOLATILITY FILTER
-        if volatility < float(df['Volatility'].mean()):
-            return "WAIT", 0
-
-        confidence = min(97, max(70, 60 + score * 8))
-
-        if score >= 4:
-            return "BUY", confidence
-        elif score <= -4:
-            return "SELL", confidence
-
-        return "WAIT", confidence
-
-    except:
-        return "WAIT", 0
-
-# ===== BACKTEST =====
-def backtest(df):
-    wins = 0
-    losses = 0
-
-    for i in range(30, len(df)-2):
-        sub = df.iloc[:i]
-        signal, _ = get_signal(sub)
-
-        if signal == "WAIT":
-            continue
-
-        entry = float(df.iloc[i]['Close'])
-        result = float(df.iloc[i+1]['Close'])
-
-        if signal == "BUY" and result > entry:
-            wins += 1
-        elif signal == "SELL" and result < entry:
-            wins += 1
-        else:
-            losses += 1
-
-    total = wins + losses
-    return (wins / total * 100) if total > 0 else 0
-
-# ===== SCAN =====
-best = None
-
-for pair in pairs:
-    df = get_data(pair)
-
-    if df is None:
-        continue
-
-    df = compute(df)
-
-    if len(df) < 50:
-        continue
-
-    signal, conf = get_signal(df)
-
-    if signal == "WAIT" or conf < min_conf:
-        continue
-
-    wr = backtest(df)
-
-    final_conf = (conf * 0.6) + (wr * 0.4)
+    df["EMA20"] = df["close"].ewm(span=20).mean()
+    df["EMA50"] = df["close"].ewm(span=50).mean()
+    df["RSI"] = rsi(df["close"])
 
     last = df.iloc[-1]
-    momentum = float(last['Momentum'])
 
-    if abs(momentum) > float(df['Momentum'].std()):
-        ttime = "30s - 60s ⚡"
+    trend_up = last["EMA20"] > last["EMA50"]
+    trend_down = last["EMA20"] < last["EMA50"]
+
+    win_rate = get_win_rate(pair, stats)
+
+    confidence = 0
+
+    # ================= BUY =================
+    if trend_up and df["RSI"].iloc[-1] > 50:
+        if is_bullish_engulfing(df) or rejection_wick(df):
+            confidence = 95 + (win_rate * 5)
+
+            return {
+                "pair": pair,
+                "direction": "BUY",
+                "confidence": round(confidence, 2),
+                "expiry": get_expiry(df)
+            }
+
+    # ================= SELL =================
+    if trend_down and df["RSI"].iloc[-1] < 50:
+        if is_bearish_engulfing(df) or rejection_wick(df):
+            confidence = 95 + (win_rate * 5)
+
+            return {
+                "pair": pair,
+                "direction": "SELL",
+                "confidence": round(confidence, 2),
+                "expiry": get_expiry(df)
+            }
+
+    return None
+
+# ================================
+# 🏆 FINAL BOSS ENGINE
+# ================================
+
+def run_final_boss():
+
+    session = get_session()
+
+    if not session:
+        print("⛔ No session")
+        return
+
+    if is_news_time():
+        print("⚠️ Avoiding news spike time")
+        return
+
+    print(f"\n⚡ FINAL BOSS — {session} SESSION\n")
+
+    stats = load_stats()
+    best_signal = None
+
+    for pair in ALL_PAIRS:
+
+        signal = analyze(pair, stats)
+
+        if not signal:
+            continue
+
+        if signal["confidence"] >= MIN_CONFIDENCE:
+
+            if best_signal is None or signal["confidence"] > best_signal["confidence"]:
+                best_signal = signal
+
+    print("\n====================")
+
+    if best_signal:
+        print("🏆 ELITE SIGNAL:")
+        print(best_signal)
     else:
-        ttime = "1 - 3 min 🧠"
+        print("❌ No clean setup (GOOD DISCIPLINE)")
 
-    if best is None or final_conf > best["score"]:
-        best = {
-            "pair": pair,
-            "signal": signal,
-            "conf": final_conf,
-            "time": ttime,
-            "wr": wr
-        }
+# ================================
+# ▶️ RUN
+# ================================
 
-# ===== DISPLAY =====
-if best is None:
-    display = "WAIT"
-    cls = "wait"
-    pair = "-"
-    conf = 0
-    ttime = "-"
-    wr = 0
-else:
-    display = f"{best['signal']} | {best['pair']}"
-    cls = "buy" if best['signal']=="BUY" else "sell"
-    pair = best['pair']
-    conf = best['conf']
-    ttime = best['time']
-    wr = best['wr']
-
-# SNIPER TIMING
-if sec < 50:
-    display = "PREPARE"
-    cls = "wait"
-elif sec < 58:
-    display = "GET READY"
-    cls = "wait"
-
-st.markdown(f"<div class='signal {cls}'>{display}<br>{conf:.0f}%</div>", unsafe_allow_html=True)
-
-# ===== INFO =====
-st.markdown("<div class='card'>", unsafe_allow_html=True)
-st.write(f"🎯 Pair: {pair}")
-st.write(f"⏱ Trade Time: {ttime}")
-st.write(f"📊 Backtest Winrate: {wr:.1f}%")
-st.write(f"🧠 Confidence: {conf:.1f}%")
-st.write(f"⏰ UTC: {now.strftime('%H:%M:%S')}")
-st.markdown("</div>", unsafe_allow_html=True)
-
-# ===== CHART =====
-if best is not None:
-    df = get_data(pair)
-    if df is not None:
-        st.line_chart(df['Close'].tail(100))
+if __name__ == "__main__":
+    run_final_boss()
