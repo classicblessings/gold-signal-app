@@ -1,46 +1,34 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-import datetime, time
+import datetime
 
 st.set_page_config(layout="wide")
 
-st.title("🚀 GOLD SIGNAL PANEL (IQ OPTION STYLE)")
+# ===== AUTO REFRESH (SAFE) =====
+st.markdown(
+    """
+    <meta http-equiv="refresh" content="10">
+    """,
+    unsafe_allow_html=True
+)
 
-strength = st.slider("Signal Strength (%)", 60, 95, 80)
+# ===== STYLE =====
+st.markdown("""
+<style>
+body {background-color:#0e0e0e;}
 
-def get_data():
-    return yf.download("XAUUSD=X", period="1d", interval="1m")
+.signal-box {
+    text-align:center;
+    font-size:65px;
+    font-weight:bold;
+    padding:25px;
+    border-radius:20px;
+    margin-top:30px;
+}
 
-def analyze(df):
-    df['MA5']=df['Close'].rolling(5).mean()
-    df['MA12']=df['Close'].rolling(12).mean()
-    df=df.dropna()
-    last=df.iloc[-1]
+.buy {background:#00c853;color:white;}
+.sell {background:#ff1744;color:white;}
+.wait {background:#2c2c2c;color:#aaa;}
 
-    if last['MA5'] > last['MA12']:
-        return "BUY", 80
-    else:
-        return "SELL", 80
-
-placeholder = st.empty()
-
-while True:
-    df = get_data()
-    signal, conf = analyze(df)
-
-    now = datetime.datetime.now()
-    sec = now.second
-
-    if sec < 50:
-        display = "PREPARE"
-    elif sec < 58:
-        display = "GET READY"
-    else:
-        display = signal
-
-    placeholder.metric("Signal", display)
-    st.write("Time:", now.strftime("%H:%M:%S"))
-    st.line_chart(df['Close'])
-
-    time.sleep(5)
+.timer
