@@ -8,25 +8,19 @@ st.set_page_config(layout="wide")
 # ===== AUTO REFRESH =====
 st.markdown('<meta http-equiv="refresh" content="6">', unsafe_allow_html=True)
 
-# ===== UI STYLE =====
+# ===== STYLE =====
 st.markdown("""
 <style>
-body {background-color:#0b0f1a;}
-
 .signal {
     text-align:center;
-    font-size:65px;
+    font-size:55px;
     font-weight:bold;
     padding:25px;
     border-radius:20px;
 }
-
 .buy {background:#00e676;color:#000;}
 .sell {background:#ff1744;color:#fff;}
 .wait {background:#1f2937;color:#aaa;}
-
-.timer {text-align:center;font-size:24px;color:#ccc;}
-
 .card {
     background:#111827;
     padding:15px;
@@ -36,143 +30,181 @@ body {background-color:#0b0f1a;}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📡 GOLD OTC SMART AI SIGNAL")
-
-# ===== MODE =====
-mode = st.radio("Mode", ["Auto Session", "Manual Scan"])
+st.title("⚡ IQ OPTION FINAL BOSS AI")
 
 # ===== SETTINGS =====
-col1, col2 = st.columns(2)
-min_conf = col1.slider("Min Confidence %", 85, 95, 90)
-session = col2.selectbox("Session", ["Morning","Afternoon","Evening"])
+min_conf = st.slider("Min Confidence %", 85, 97, 92)
 
-# ===== SESSION =====
-hour = datetime.datetime.now().hour
-sessions = {
-    "Morning": (6,12),
-    "Afternoon": (12,18),
-    "Evening": (18,23)
-}
-start, end = sessions[session]
+# ===== TIME =====
+now = datetime.datetime.utcnow()
+sec = now.second
+
+# ===== PAIRS =====
+pairs = ["EURUSD=X","GBPUSD=X","USDJPY=X","AUDUSD=X","USDCAD=X"]
 
 # ===== DATA =====
 @st.cache_data(ttl=5)
-def get_data():
+def get_data(symbol):
     try:
-        return yf.download("XAUUSD=X", period="1d", interval="1m")
+        df = yf.download(symbol, period="1d", interval="1m")
+        if df.empty:
+            return None
+        return df
     except:
-        return pd.DataFrame()
+        return None
 
-# ===== SMART AI ANALYSIS =====
-def analyze(df):
-    if df is None or df.empty or len(df) < 50:
-        return "WAIT", 0
-
+# ===== INDICATORS =====
+def compute(df):
     df['MA5'] = df['Close'].rolling(5).mean()
     df['MA20'] = df['Close'].rolling(20).mean()
 
-    # RSI
     delta = df['Close'].diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = -delta.clip(upper=0).rolling(14).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
 
-    # Momentum
-    df['Momentum'] = df['Close'].diff(5)
-
-    # Volatility
+    df['Momentum'] = df['Close'].diff(3)
     df['Volatility'] = df['Close'].rolling(10).std()
 
-    df = df.dropna()
-    if df.empty:
-        return "WAIT", 0
+    return df.dropna()
 
+# ===== SIGNAL ENGINE =====
+def get_signal(df):
     last = df.iloc[-1]
-
     score = 0
 
-    # Trend
-    score += 2 if last['MA5'] > last['MA20'] else -2
-
-    # Momentum
-    score += 1 if last['Momentum'] > 0 else -1
-
-    # RSI
-    if last['RSI'] < 30:
+    # TREND
+    if last['MA5'] > last['MA20']:
         score += 2
-    elif last['RSI'] > 70:
+    else:
         score -= 2
 
-    # Volatility filter
+    # MOMENTUM
+    score += 1 if last['Momentum'] > 0 else -1
+
+    # RSI EXTREME
+    if last['RSI'] < 25:
+        score += 2
+    elif last['RSI'] > 75:
+        score -= 2
+
+    # VOLATILITY FILTER
     if last['Volatility'] < df['Volatility'].mean():
         return "WAIT", 0
 
-    confidence = min(95, max(60, 65 + (score * 7)))
+    confidence = min(97, max(70, 60 + score * 8))
 
-    if score >= 3:
+    if score >= 4:
         return "BUY", confidence
-    elif score <= -3:
+    elif score <= -4:
         return "SELL", confidence
-    else:
-        return "WAIT", confidence
+    return "WAIT", confidence
 
-# ===== MAIN =====
-df = get_data()
-signal, conf = analyze(df)
+# ===== BACKTEST =====
+def backtest(df):
+    wins = 0
+    losses = 0
 
-now = datetime.datetime.now()
-sec = now.second
+    for i in range(30, len(df)-2):
+        sub = df.iloc[:i]
+        signal, _ = get_signal(sub)
 
-# ===== LOGIC =====
-if mode == "Manual Scan":
-    timer = 30 - (sec % 30)
+        if signal == "WAIT":
+            continue
 
-    if conf < min_conf:
-        display = "WAIT"
-        cls = "wait"
-    else:
-        display = signal
-        cls = "buy" if signal == "BUY" else "sell"
+        entry = df.iloc[i]['Close']
+        result = df.iloc[i+1]['Close']
 
-    st.markdown(f"<div class='signal {cls}'>{display}<br>{conf:.0f}%</div>", unsafe_allow_html=True)
-    st.markdown(f"<div class='timer'>⚡ Refresh in: {timer}s</div>", unsafe_allow_html=True)
+        if signal == "BUY" and result > entry:
+            wins += 1
+        elif signal == "SELL" and result < entry:
+            wins += 1
+        else:
+            losses += 1
 
+    total = wins + losses
+    winrate = (wins / total * 100) if total > 0 else 0
+    return winrate
+
+# ===== SCAN =====
+best = None
+
+for pair in pairs:
+    df = get_data(pair)
+    if df is None:
+        continue
+
+    df = compute(df)
+
+    if len(df) < 50:
+        continue
+
+    signal, conf = get_signal(df)
+
+    if signal == "WAIT" or conf < min_conf:
+        continue
+
+    wr = backtest(df)
+
+    # combine real + backtest confidence
+    final_conf = (conf * 0.6) + (wr * 0.4)
+
+    if best is None or final_conf > best["score"]:
+        # trade timing logic
+        last = df.iloc[-1]
+        strong_move = abs(last['Momentum']) > df['Momentum'].std()
+
+        if strong_move:
+            ttime = "30s - 60s ⚡"
+        else:
+            ttime = "1 - 3 min 🧠"
+
+        best = {
+            "pair": pair,
+            "signal": signal,
+            "conf": final_conf,
+            "time": ttime,
+            "wr": wr
+        }
+
+# ===== DISPLAY =====
+if best is None:
+    display = "WAIT"
+    cls = "wait"
+    pair = "-"
+    conf = 0
+    ttime = "-"
+    wr = 0
 else:
-    timer = 60 - sec
+    display = f"{best['signal']}\n{best['pair']}"
+    cls = "buy" if best['signal']=="BUY" else "sell"
+    pair = best['pair']
+    conf = best['conf']
+    ttime = best['time']
+    wr = best['wr']
 
-    if not (start <= hour < end):
-        display = "SESSION CLOSED"
-        cls = "wait"
+# SNIPER ENTRY FILTER
+if sec < 50:
+    display = "PREPARE"
+    cls = "wait"
+elif sec < 58:
+    display = "GET READY"
+    cls = "wait"
 
-    elif conf < min_conf:
-        display = "WAIT"
-        cls = "wait"
+st.markdown(f"<div class='signal {cls}'>{display}<br>{conf:.0f}%</div>", unsafe_allow_html=True)
 
-    elif sec < 50:
-        display = "PREPARE"
-        cls = "wait"
-
-    elif sec < 58:
-        display = "GET READY"
-        cls = "wait"
-
-    else:
-        display = signal
-        cls = "buy" if signal == "BUY" else "sell"
-
-    st.markdown(f"<div class='signal {cls}'>{display}<br>{conf:.0f}%</div>", unsafe_allow_html=True)
-    st.markdown(f"<div class='timer'>⏱ Entry in: {timer}s</div>", unsafe_allow_html=True)
-
-# ===== INFO PANEL =====
+# ===== INFO =====
 st.markdown("<div class='card'>", unsafe_allow_html=True)
-st.write(f"🧠 Confidence: {conf:.0f}%")
-st.write(f"⏰ Time: {now.strftime('%H:%M:%S')}")
-st.write(f"📊 Mode: {mode}")
+st.write(f"🎯 Pair: {pair}")
+st.write(f"⏱ Trade Time: {ttime}")
+st.write(f"📊 Backtest Winrate: {wr:.1f}%")
+st.write(f"🧠 Final Confidence: {conf:.1f}%")
+st.write(f"⏰ UTC: {now.strftime('%H:%M:%S')}")
 st.markdown("</div>", unsafe_allow_html=True)
 
 # ===== CHART =====
-if not df.empty:
-    st.line_chart(df['Close'].tail(100))
-else:
-    st.warning("Waiting for market data...")
+if best is not None:
+    df = get_data(pair)
+    if df is not None:
+        st.line_chart(df['Close'].tail(100))
