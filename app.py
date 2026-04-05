@@ -30,7 +30,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ IQ OPTION FINAL BOSS AI")
+st.title("⚡ IQ OPTION FINAL BOSS AI (STABLE)")
 
 # ===== SETTINGS =====
 min_conf = st.slider("Min Confidence %", 85, 97, 92)
@@ -46,15 +46,17 @@ pairs = ["EURUSD=X","GBPUSD=X","USDJPY=X","AUDUSD=X","USDCAD=X"]
 @st.cache_data(ttl=5)
 def get_data(symbol):
     try:
-        df = yf.download(symbol, period="1d", interval="1m")
-        if df.empty:
+        df = yf.download(symbol, period="1d", interval="1m", progress=False)
+        if df is None or df.empty:
             return None
-        return df
+        return df.copy()
     except:
         return None
 
 # ===== INDICATORS =====
 def compute(df):
+    df = df.copy()
+
     df['MA5'] = df['Close'].rolling(5).mean()
     df['MA20'] = df['Close'].rolling(20).mean()
 
@@ -67,39 +69,56 @@ def compute(df):
     df['Momentum'] = df['Close'].diff(3)
     df['Volatility'] = df['Close'].rolling(10).std()
 
-    return df.dropna()
+    df = df.dropna()
 
-# ===== SIGNAL ENGINE =====
+    # FORCE CLEAN NUMERIC VALUES (FIX ERROR)
+    df = df.astype(float)
+
+    return df
+
+# ===== SIGNAL ENGINE (FIXED) =====
 def get_signal(df):
-    last = df.iloc[-1]
-    score = 0
+    try:
+        last = df.iloc[-1]
 
-    # TREND
-    if last['MA5'] > last['MA20']:
-        score += 2
-    else:
-        score -= 2
+        ma5 = float(last['MA5'])
+        ma20 = float(last['MA20'])
+        momentum = float(last['Momentum'])
+        rsi = float(last['RSI'])
+        volatility = float(last['Volatility'])
 
-    # MOMENTUM
-    score += 1 if last['Momentum'] > 0 else -1
+        score = 0
 
-    # RSI EXTREME
-    if last['RSI'] < 25:
-        score += 2
-    elif last['RSI'] > 75:
-        score -= 2
+        # TREND
+        if ma5 > ma20:
+            score += 2
+        else:
+            score -= 2
 
-    # VOLATILITY FILTER
-    if last['Volatility'] < df['Volatility'].mean():
+        # MOMENTUM
+        score += 1 if momentum > 0 else -1
+
+        # RSI
+        if rsi < 25:
+            score += 2
+        elif rsi > 75:
+            score -= 2
+
+        # VOLATILITY FILTER
+        if volatility < float(df['Volatility'].mean()):
+            return "WAIT", 0
+
+        confidence = min(97, max(70, 60 + score * 8))
+
+        if score >= 4:
+            return "BUY", confidence
+        elif score <= -4:
+            return "SELL", confidence
+
+        return "WAIT", confidence
+
+    except:
         return "WAIT", 0
-
-    confidence = min(97, max(70, 60 + score * 8))
-
-    if score >= 4:
-        return "BUY", confidence
-    elif score <= -4:
-        return "SELL", confidence
-    return "WAIT", confidence
 
 # ===== BACKTEST =====
 def backtest(df):
@@ -113,8 +132,8 @@ def backtest(df):
         if signal == "WAIT":
             continue
 
-        entry = df.iloc[i]['Close']
-        result = df.iloc[i+1]['Close']
+        entry = float(df.iloc[i]['Close'])
+        result = float(df.iloc[i+1]['Close'])
 
         if signal == "BUY" and result > entry:
             wins += 1
@@ -124,14 +143,14 @@ def backtest(df):
             losses += 1
 
     total = wins + losses
-    winrate = (wins / total * 100) if total > 0 else 0
-    return winrate
+    return (wins / total * 100) if total > 0 else 0
 
 # ===== SCAN =====
 best = None
 
 for pair in pairs:
     df = get_data(pair)
+
     if df is None:
         continue
 
@@ -147,19 +166,17 @@ for pair in pairs:
 
     wr = backtest(df)
 
-    # combine real + backtest confidence
     final_conf = (conf * 0.6) + (wr * 0.4)
 
+    last = df.iloc[-1]
+    momentum = float(last['Momentum'])
+
+    if abs(momentum) > float(df['Momentum'].std()):
+        ttime = "30s - 60s ⚡"
+    else:
+        ttime = "1 - 3 min 🧠"
+
     if best is None or final_conf > best["score"]:
-        # trade timing logic
-        last = df.iloc[-1]
-        strong_move = abs(last['Momentum']) > df['Momentum'].std()
-
-        if strong_move:
-            ttime = "30s - 60s ⚡"
-        else:
-            ttime = "1 - 3 min 🧠"
-
         best = {
             "pair": pair,
             "signal": signal,
@@ -177,14 +194,14 @@ if best is None:
     ttime = "-"
     wr = 0
 else:
-    display = f"{best['signal']}\n{best['pair']}"
+    display = f"{best['signal']} | {best['pair']}"
     cls = "buy" if best['signal']=="BUY" else "sell"
     pair = best['pair']
     conf = best['conf']
     ttime = best['time']
     wr = best['wr']
 
-# SNIPER ENTRY FILTER
+# SNIPER TIMING
 if sec < 50:
     display = "PREPARE"
     cls = "wait"
@@ -199,7 +216,7 @@ st.markdown("<div class='card'>", unsafe_allow_html=True)
 st.write(f"🎯 Pair: {pair}")
 st.write(f"⏱ Trade Time: {ttime}")
 st.write(f"📊 Backtest Winrate: {wr:.1f}%")
-st.write(f"🧠 Final Confidence: {conf:.1f}%")
+st.write(f"🧠 Confidence: {conf:.1f}%")
 st.write(f"⏰ UTC: {now.strftime('%H:%M:%S')}")
 st.markdown("</div>", unsafe_allow_html=True)
 
