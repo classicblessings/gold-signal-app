@@ -1,16 +1,19 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-import random
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 
-st.set_page_config(page_title="PRO SNIPER AI", layout="centered")
+st.set_page_config(page_title="FINAL BOSS AUTO SNIPER", layout="centered")
 
 # ===== STYLE =====
 st.markdown("""
 <style>
-body {background: linear-gradient(135deg,#020617,#0f172a); color:#e2e8f0;}
+body {
+background: linear-gradient(135deg,#020617,#0f172a);
+color:#e2e8f0;
+font-family: 'Segoe UI';
+}
 h1 {text-align:center;color:#22c55e;}
 .card {
 background:#020617;
@@ -42,13 +45,16 @@ def entry_time():
 def get_data(sym):
     try:
         df = yf.download(sym, interval="1m", period="1d", progress=False)
+
         if df is None or df.empty or len(df) < 60:
             return None
 
         df = df[['Open','High','Low','Close']].copy()
         df = df.apply(pd.to_numeric, errors='coerce').dropna()
         df.reset_index(drop=True, inplace=True)
+
         return df.tail(60)
+
     except:
         return None
 
@@ -64,6 +70,7 @@ def indicators(df):
     df["RSI"] = (100 - (100/(1+rs))).fillna(50)
 
     df["VOL"] = df["Close"].rolling(10).std().fillna(0)
+
     return df
 
 # ===== PATTERN =====
@@ -72,10 +79,10 @@ def pattern(df):
     o2,c2 = df["Open"].iloc[-1], df["Close"].iloc[-1]
 
     if c2 > o2 and c1 < o1 and c2 > o1:
-        return "BULLISH ENGULFING"
+        return "Bullish Engulfing"
     elif c2 < o2 and c1 > o1 and c2 < o1:
-        return "BEARISH ENGULFING"
-    return "NONE"
+        return "Bearish Engulfing"
+    return "None"
 
 # ===== ANALYSIS =====
 def analyze(sym):
@@ -91,43 +98,42 @@ def analyze(sym):
     vol = df["VOL"].iloc[-1]
     pat = pattern(df)
 
+    # ===== FILTER (IMPORTANT) =====
+    if vol < 0.0003:
+        return None  # skip weak market
+
     score = 0
     reasons = []
 
     # TREND
     if ema_fast > ema_slow:
+        direction = "BUY 📈"
         score += 2
         reasons.append("Uptrend")
     else:
+        direction = "SELL 📉"
         score += 2
         reasons.append("Downtrend")
 
-    # MOMENTUM
+    # RSI
     if rsi < 45:
         score += 1
-        reasons.append("Oversold → Buy pressure")
+        reasons.append("Oversold")
     elif rsi > 55:
         score += 1
-        reasons.append("Overbought → Sell pressure")
+        reasons.append("Overbought")
 
-    # VOLATILITY FILTER
-    if vol < 0.0003:
-        return None  # skip weak market
-
-    # PATTERN
-    if pat != "NONE":
+    # PATTERN BOOST
+    if pat != "None":
         score += 2
         reasons.append(pat)
 
-    # DECISION
-    direction = "BUY 📈" if ema_fast > ema_slow else "SELL 📉"
-
-    confidence = min(92, 82 + score * 2)
+    confidence = min(92, 80 + score * 2)
 
     return direction, confidence, reasons
 
-# ===== SCAN =====
-def scan_market():
+# ===== AUTO SIGNAL =====
+def get_signal():
     best = None
     best_score = 0
 
@@ -145,16 +151,16 @@ def scan_market():
     return best
 
 # ===== UI =====
-st.markdown("<h1>💀 PRO SNIPER AI (REAL LOGIC)</h1>", unsafe_allow_html=True)
+st.markdown("<h1>💀 FINAL BOSS AUTO SNIPER</h1>", unsafe_allow_html=True)
 
-# ===== BUTTON =====
-if st.button("🔍 SCAN MARKET"):
-    res = scan_market()
+if st.button("🎯 GET STRONG SIGNAL"):
 
-    if res is None:
-        st.warning("⚠️ Market weak — wait (this saves your money)")
+    signal = get_signal()
+
+    if signal is None:
+        st.warning("⚠️ Market not good — WAIT (this protects your money)")
     else:
-        pair, direction, confidence, reasons = res
+        pair, direction, confidence, reasons = signal
         wait = entry_time()
 
         st.markdown(f"""
@@ -163,15 +169,12 @@ if st.button("🔍 SCAN MARKET"):
         <h3>{direction}</h3>
         ⏳ Entry: {wait}s<br>
         🔥 Confidence: {confidence}%<br>
-        📊 Reasons: {", ".join(reasons)}
+        📊 Reason: {", ".join(reasons)}
         </div>
         """, unsafe_allow_html=True)
 
-        # countdown
         for i in range(wait, -1, -1):
             st.write(f"⏳ {i}s")
             time.sleep(1)
 
-        st.success("👉 Enter trade NOW (1 min)")
-
-        st.info("♻️ If first entry loses, re-enter immediately (2nd candle recovery)")
+        st.success("👉 Enter trade NOW (1 minute)")
