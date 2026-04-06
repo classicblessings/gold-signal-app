@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # ===============================
 # CONFIG
@@ -21,10 +21,10 @@ PAIRS = {
 }
 
 # ===============================
-# TIME (WAT)
+# TIME (WAT) ✅ FIXED
 # ===============================
 def get_wat_time():
-    return datetime.utcnow() + timedelta(hours=1)
+    return datetime.now(timezone.utc) + timedelta(hours=1)
 
 # ===============================
 # SESSION
@@ -68,15 +68,12 @@ def detect_pattern(df):
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
-    # Bullish engulfing
     if prev["Close"] < prev["Open"] and last["Close"] > last["Open"] and last["Close"] > prev["Open"]:
         return "BULLISH ENGULFING 📈"
 
-    # Bearish engulfing
     if prev["Close"] > prev["Open"] and last["Close"] < last["Open"] and last["Close"] < prev["Open"]:
         return "BEARISH ENGULFING 📉"
 
-    # Pin bar
     body = abs(last["Close"] - last["Open"])
     wick = last["High"] - last["Low"]
 
@@ -97,7 +94,7 @@ def get_expiry(momentum, rsi):
         return "5 MIN"
 
 # ===============================
-# ANALYSIS (PRO MAX)
+# ANALYSIS
 # ===============================
 def analyze(symbol):
     df = get_live_data(symbol)
@@ -117,9 +114,7 @@ def analyze(symbol):
 
     pattern = detect_pattern(df)
 
-    # ===============================
     # STRUCTURE
-    # ===============================
     recent_high = df["High"].rolling(10).max().iloc[-1]
     recent_low = df["Low"].rolling(10).min().iloc[-1]
 
@@ -127,20 +122,15 @@ def analyze(symbol):
     near_low = last["Close"] <= recent_low * 1.001
 
     structure = "NONE"
-
     if near_high:
         structure = "RESISTANCE 🔴"
     elif near_low:
         structure = "SUPPORT 🟢"
 
-    # ===============================
     # FAKE BREAKOUT
-    # ===============================
     fake_breakout = False
-
     if last["High"] > recent_high and last["Close"] < recent_high:
         fake_breakout = True
-
     if last["Low"] < recent_low and last["Close"] > recent_low:
         fake_breakout = True
 
