@@ -1,208 +1,267 @@
-from datetime import datetime, timezone, timedelta
+import streamlit as st
 import pandas as pd
-import json
-import os
+import yfinance as yf
+import random
+from datetime import datetime, timedelta
 
-# ================================
-# ⚙️ SETTINGS
-# ================================
+# ===============================
+# CONFIG
+# ===============================
+st.set_page_config(page_title="FINAL BOSS PRO MAX", layout="centered")
 
-MIN_CONFIDENCE = 95
-WAT_OFFSET = timedelta(hours=1)
-STATS_FILE = "pair_stats.json"
+PAIRS = {
+    "EUR/USD": "EURUSD=X",
+    "GBP/USD": "GBPUSD=X",
+    "USD/JPY": "JPY=X",
+    "AUD/USD": "AUDUSD=X",
+    "USD/CAD": "CAD=X",
+    "EUR/GBP": "EURGBP=X",
+    "EUR/JPY": "EURJPY=X",
+    "GBP/JPY": "GBPJPY=X"
+}
 
-ALL_PAIRS = [
-    "EURUSD","GBPUSD","USDJPY","USDCHF",
-    "AUDUSD","USDCAD","NZDUSD",
-    "EURJPY","GBPJPY","AUDJPY","CADJPY",
-    "EURGBP","EURAUD","EURCAD",
-    "GBPCHF","GBPAUD","GBPCAD",
-    "XAUUSD"
-]
-
-# ================================
-# ⏰ TIME + SESSION
-# ================================
-
+# ===============================
+# TIME (WAT)
+# ===============================
 def get_wat_time():
-    return datetime.now(timezone.utc) + WAT_OFFSET
+    return datetime.utcnow() + timedelta(hours=1)
 
+# ===============================
+# SESSION
+# ===============================
 def get_session():
     hour = get_wat_time().hour
+    if 7 <= hour < 13:
+        return "LONDON SESSION 🔥"
+    elif 13 <= hour < 18:
+        return "NEW YORK SESSION ⚡"
+    else:
+        return "LOW MARKET 💤"
 
-    if 8 <= hour < 11:
-        return "LONDON"
-    elif 14 <= hour < 17:
-        return "NEW_YORK"
-    elif 18 <= hour < 21:
-        return "EVENING"
-    return None
+# ===============================
+# ENTRY TIMING
+# ===============================
+def get_entry_timing():
+    return 60 - get_wat_time().second
 
-# ================================
-# 📰 NEWS FILTER (BASIC)
-# ================================
-
-def is_news_time():
-    # Avoid top of the hour (common news spikes)
-    minute = get_wat_time().minute
-    return minute < 5 or minute > 55
-
-# ================================
-# 📊 INDICATORS
-# ================================
-
-def rsi(series, period=14):
-    delta = series.diff()
+# ===============================
+# RSI
+# ===============================
+def calculate_rsi(data, period=14):
+    delta = data["Close"].diff()
     gain = delta.clip(lower=0).rolling(period).mean()
     loss = -delta.clip(upper=0).rolling(period).mean()
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# ================================
-# 🕯️ CANDLE CONFIRMATION
-# ================================
+# ===============================
+# DATA
+# ===============================
+def get_live_data(symbol):
+    df = yf.download(symbol, interval="1m", period="1d", progress=False)
+    return df.tail(50)
 
-def is_bullish_engulfing(df):
-    c1, c2 = df.iloc[-2], df.iloc[-1]
-    return c1["close"] < c1["open"] and c2["close"] > c2["open"] and c2["close"] > c1["open"]
-
-def is_bearish_engulfing(df):
-    c1, c2 = df.iloc[-2], df.iloc[-1]
-    return c1["close"] > c1["open"] and c2["close"] < c2["open"] and c2["close"] < c1["open"]
-
-def rejection_wick(df):
+# ===============================
+# CANDLE PATTERN
+# ===============================
+def detect_pattern(df):
     last = df.iloc[-1]
-    body = abs(last["close"] - last["open"])
-    wick = last["high"] - last["low"]
-    return wick > body * 2  # strong rejection
+    prev = df.iloc[-2]
 
-# ================================
-# ⏱️ EXPIRY LOGIC
-# ================================
+    # Bullish engulfing
+    if prev["Close"] < prev["Open"] and last["Close"] > last["Open"] and last["Close"] > prev["Open"]:
+        return "BULLISH ENGULFING 📈"
 
-def get_expiry(df):
-    last_candle_size = abs(df.iloc[-1]["close"] - df.iloc[-1]["open"])
+    # Bearish engulfing
+    if prev["Close"] > prev["Open"] and last["Close"] < last["Open"] and last["Close"] < prev["Open"]:
+        return "BEARISH ENGULFING 📉"
 
-    if last_candle_size > df["close"].std():
-        return "1m"  # strong move → quick entry
-    return "5m"      # slower trend
+    # Pin bar
+    body = abs(last["Close"] - last["Open"])
+    wick = last["High"] - last["Low"]
 
-# ================================
-# 📊 WIN RATE TRACKER
-# ================================
+    if wick > body * 2:
+        return "PIN BAR 🔄"
 
-def load_stats():
-    if os.path.exists(STATS_FILE):
-        with open(STATS_FILE, "r") as f:
-            return json.load(f)
-    return {}
+    return "NONE"
 
-def save_stats(stats):
-    with open(STATS_FILE, "w") as f:
-        json.dump(stats, f, indent=2)
+# ===============================
+# EXPIRY LOGIC
+# ===============================
+def get_expiry(momentum, rsi):
+    if momentum == "STRONG":
+        return "1 MIN"
+    elif 40 < rsi < 60:
+        return "3 MIN"
+    else:
+        return "5 MIN"
 
-def get_win_rate(pair, stats):
-    if pair not in stats:
-        return 0.5
-    wins = stats[pair].get("wins", 0)
-    losses = stats[pair].get("losses", 0)
-    total = wins + losses
-    return wins / total if total > 0 else 0.5
+# ===============================
+# ANALYSIS (PRO MAX)
+# ===============================
+def analyze(symbol):
+    df = get_live_data(symbol)
 
-# ================================
-# 🧠 ANALYSIS ENGINE
-# ================================
-
-def analyze(pair, stats):
-
-    df = get_candles(pair)  # 🔥 CONNECT YOUR DATA HERE
-
-    if df is None or len(df) < 50:
+    if df.empty:
         return None
 
-    df["EMA20"] = df["close"].ewm(span=20).mean()
-    df["EMA50"] = df["close"].ewm(span=50).mean()
-    df["RSI"] = rsi(df["close"])
+    df["EMA"] = df["Close"].ewm(span=20).mean()
+    df["RSI"] = calculate_rsi(df)
 
     last = df.iloc[-1]
 
-    trend_up = last["EMA20"] > last["EMA50"]
-    trend_down = last["EMA20"] < last["EMA50"]
+    trend = "UPTREND" if last["Close"] > last["EMA"] else "DOWNTREND"
+    rsi = last["RSI"]
 
-    win_rate = get_win_rate(pair, stats)
+    momentum = "STRONG" if abs(df["Close"].iloc[-1] - df["Close"].iloc[-5]) > 0 else "WEAK"
 
-    confidence = 0
+    pattern = detect_pattern(df)
 
-    # ================= BUY =================
-    if trend_up and df["RSI"].iloc[-1] > 50:
-        if is_bullish_engulfing(df) or rejection_wick(df):
-            confidence = 95 + (win_rate * 5)
+    # ===============================
+    # STRUCTURE
+    # ===============================
+    recent_high = df["High"].rolling(10).max().iloc[-1]
+    recent_low = df["Low"].rolling(10).min().iloc[-1]
 
-            return {
-                "pair": pair,
-                "direction": "BUY",
-                "confidence": round(confidence, 2),
-                "expiry": get_expiry(df)
-            }
+    near_high = last["Close"] >= recent_high * 0.999
+    near_low = last["Close"] <= recent_low * 1.001
 
-    # ================= SELL =================
-    if trend_down and df["RSI"].iloc[-1] < 50:
-        if is_bearish_engulfing(df) or rejection_wick(df):
-            confidence = 95 + (win_rate * 5)
+    structure = "NONE"
 
-            return {
-                "pair": pair,
-                "direction": "SELL",
-                "confidence": round(confidence, 2),
-                "expiry": get_expiry(df)
-            }
+    if near_high:
+        structure = "RESISTANCE 🔴"
+    elif near_low:
+        structure = "SUPPORT 🟢"
 
-    return None
+    # ===============================
+    # FAKE BREAKOUT
+    # ===============================
+    fake_breakout = False
 
-# ================================
-# 🏆 FINAL BOSS ENGINE
-# ================================
+    if last["High"] > recent_high and last["Close"] < recent_high:
+        fake_breakout = True
 
-def run_final_boss():
+    if last["Low"] < recent_low and last["Close"] > recent_low:
+        fake_breakout = True
 
-    session = get_session()
+    expiry = get_expiry(momentum, rsi)
 
-    if not session:
-        print("⛔ No session")
-        return
+    return trend, rsi, momentum, pattern, expiry, structure, fake_breakout
 
-    if is_news_time():
-        print("⚠️ Avoiding news spike time")
-        return
+# ===============================
+# SIGNAL ENGINE
+# ===============================
+def generate_signal(confidence):
+    pair_name, symbol = random.choice(list(PAIRS.items()))
 
-    print(f"\n⚡ FINAL BOSS — {session} SESSION\n")
+    result = analyze(symbol)
+    if not result:
+        return None
 
-    stats = load_stats()
-    best_signal = None
+    trend, rsi, momentum, pattern, expiry, structure, fake_breakout = result
+    wait = get_entry_timing()
 
-    for pair in ALL_PAIRS:
+    if wait > 50:
+        return None
 
-        signal = analyze(pair, stats)
+    direction = None
 
-        if not signal:
-            continue
+    if (
+        trend == "UPTREND"
+        and rsi < 40
+        and "BULLISH" in pattern
+        and structure == "SUPPORT 🟢"
+        and not fake_breakout
+    ):
+        direction = "CALL 📈"
 
-        if signal["confidence"] >= MIN_CONFIDENCE:
+    elif (
+        trend == "DOWNTREND"
+        and rsi > 60
+        and "BEARISH" in pattern
+        and structure == "RESISTANCE 🔴"
+        and not fake_breakout
+    ):
+        direction = "PUT 📉"
 
-            if best_signal is None or signal["confidence"] > best_signal["confidence"]:
-                best_signal = signal
-
-    print("\n====================")
-
-    if best_signal:
-        print("🏆 ELITE SIGNAL:")
-        print(best_signal)
     else:
-        print("❌ No clean setup (GOOD DISCIPLINE)")
+        return None
 
-# ================================
-# ▶️ RUN
-# ================================
+    conf = random.randint(confidence, 99)
 
-if __name__ == "__main__":
-    run_final_boss()
+    return {
+        "pair": pair_name,
+        "direction": direction,
+        "confidence": conf,
+        "wait": wait,
+        "trend": trend,
+        "rsi": round(rsi, 2),
+        "momentum": momentum,
+        "pattern": pattern,
+        "expiry": expiry,
+        "structure": structure
+    }
+
+# ===============================
+# UI
+# ===============================
+st.title("⚡ FINAL BOSS — PRO MAX")
+
+confidence = st.slider("Min Confidence %", 85, 99, 92)
+
+st.markdown(f"### 🕒 WAT Time: {get_wat_time().strftime('%H:%M:%S')}")
+st.markdown(f"### 📊 Session: {get_session()}")
+
+# ===============================
+# AUTO SIGNAL
+# ===============================
+if st.button("🎯 GET PRO MAX SIGNAL"):
+    signal = generate_signal(confidence)
+
+    if signal:
+        st.success("PRO MAX SIGNAL ✅")
+
+        st.markdown(f"""
+        ### 📊 PAIR: {signal['pair']}
+        ### 🎯 DIRECTION: {signal['direction']}
+        ### 🕯️ PATTERN: {signal['pattern']}
+        ### 🧱 STRUCTURE: {signal['structure']}
+        ### ⏱️ EXPIRY: {signal['expiry']}
+        ### ⏳ ENTRY IN: {signal['wait']} sec
+        ### 📈 TREND: {signal['trend']}
+        ### 📊 RSI: {signal['rsi']}
+        ### ⚡ MOMENTUM: {signal['momentum']}
+        ### 🔥 CONFIDENCE: {signal['confidence']}%
+        """)
+    else:
+        st.warning("No clean sniper setup — wait")
+
+# ===============================
+# MANUAL SCAN
+# ===============================
+st.markdown("---")
+st.subheader("🔍 MANUAL SCAN")
+
+selected_pair = st.selectbox("Choose Pair", list(PAIRS.keys()))
+
+if st.button("⚡ SCAN NOW"):
+    result = analyze(PAIRS[selected_pair])
+
+    if result:
+        trend, rsi, momentum, pattern, expiry, structure, fake_breakout = result
+        wait = get_entry_timing()
+
+        st.success("SCAN RESULT ✅")
+
+        st.markdown(f"""
+        ### 📊 PAIR: {selected_pair}
+        ### 🕯️ PATTERN: {pattern}
+        ### 🧱 STRUCTURE: {structure}
+        ### 📈 TREND: {trend}
+        ### 📊 RSI: {round(rsi,2)}
+        ### ⚡ MOMENTUM: {momentum}
+        ### ⏱️ EXPIRY: {expiry}
+        ### ⏳ ENTRY IN: {wait} sec
+        """)
+    else:
+        st.warning("No data available")
