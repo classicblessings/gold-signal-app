@@ -5,23 +5,19 @@ import random
 import time
 from datetime import datetime, timedelta
 
-st.set_page_config(page_title="FINAL BOSS LEVEL 2", layout="centered")
+st.set_page_config(page_title="PRO SNIPER AI", layout="centered")
 
 # ===== STYLE =====
 st.markdown("""
 <style>
-body {
-background: linear-gradient(135deg,#020617,#0f172a);
-color:#e2e8f0;
-font-family: 'Segoe UI';
-}
+body {background: linear-gradient(135deg,#020617,#0f172a); color:#e2e8f0;}
 h1 {text-align:center;color:#22c55e;}
 .card {
 background:#020617;
 padding:20px;
 border-radius:15px;
-box-shadow:0 0 25px rgba(0,255,200,0.15);
 margin-top:10px;
+box-shadow:0 0 20px rgba(0,255,200,0.1);
 }
 </style>
 """, unsafe_allow_html=True)
@@ -32,44 +28,34 @@ ASSETS = {
 "GBPUSD":"GBPUSD=X",
 "USDJPY":"JPY=X",
 "AUDUSD":"AUDUSD=X",
-"USDCAD":"CAD=X",
 "EURJPY":"EURJPY=X",
 "GBPJPY":"GBPJPY=X",
 "XAUUSD":"GC=F"
 }
 
 # ===== TIME =====
-def current_time():
-    return datetime.utcnow() + timedelta(hours=1)
-
 def entry_time():
-    sec = current_time().second
+    sec = datetime.utcnow().second
     return 60 - sec if sec > 5 else sec
 
-def duration():
-    return random.choice([1,2,3,4,5])
-
 # ===== DATA =====
-def get_data(symbol):
+def get_data(sym):
     try:
-        df = yf.download(symbol, interval="1m", period="1d", progress=False)
-
-        if df is None or df.empty or len(df) < 50:
+        df = yf.download(sym, interval="1m", period="1d", progress=False)
+        if df is None or df.empty or len(df) < 60:
             return None
 
         df = df[['Open','High','Low','Close']].copy()
         df = df.apply(pd.to_numeric, errors='coerce').dropna()
         df.reset_index(drop=True, inplace=True)
-
-        return df.tail(50)
-
+        return df.tail(60)
     except:
         return None
 
 # ===== INDICATORS =====
 def indicators(df):
-    df["EMA"] = df["Close"].ewm(span=20).mean()
     df["EMA_FAST"] = df["Close"].ewm(span=5).mean()
+    df["EMA_SLOW"] = df["Close"].ewm(span=20).mean()
 
     delta = df["Close"].diff()
     gain = delta.clip(lower=0).rolling(14).mean()
@@ -78,163 +64,114 @@ def indicators(df):
     df["RSI"] = (100 - (100/(1+rs))).fillna(50)
 
     df["VOL"] = df["Close"].rolling(10).std().fillna(0)
-
     return df
 
-# ===== PATTERN DETECTION =====
+# ===== PATTERN =====
 def pattern(df):
-    o1, c1 = df["Open"].iloc[-2], df["Close"].iloc[-2]
-    o2, c2 = df["Open"].iloc[-1], df["Close"].iloc[-1]
+    o1,c1 = df["Open"].iloc[-2], df["Close"].iloc[-2]
+    o2,c2 = df["Open"].iloc[-1], df["Close"].iloc[-1]
 
-    # ENGULFING
     if c2 > o2 and c1 < o1 and c2 > o1:
-        return "BULLISH"
+        return "BULLISH ENGULFING"
     elif c2 < o2 and c1 > o1 and c2 < o1:
-        return "BEARISH"
-
+        return "BEARISH ENGULFING"
     return "NONE"
 
 # ===== ANALYSIS =====
-def analyze(symbol):
-    df = get_data(symbol)
+def analyze(sym):
+    df = get_data(sym)
     if df is None:
         return None
 
-    try:
-        df = indicators(df)
+    df = indicators(df)
 
-        c = float(df["Close"].iloc[-1])
-        ema = float(df["EMA"].iloc[-1])
-        ema_fast = float(df["EMA_FAST"].iloc[-1])
-        rsi = float(df["RSI"].iloc[-1])
-        vol = float(df["VOL"].iloc[-1])
+    ema_fast = df["EMA_FAST"].iloc[-1]
+    ema_slow = df["EMA_SLOW"].iloc[-1]
+    rsi = df["RSI"].iloc[-1]
+    vol = df["VOL"].iloc[-1]
+    pat = pattern(df)
 
-        pat = pattern(df)
+    score = 0
+    reasons = []
 
-        buy = 0
-        sell = 0
+    # TREND
+    if ema_fast > ema_slow:
+        score += 2
+        reasons.append("Uptrend")
+    else:
+        score += 2
+        reasons.append("Downtrend")
 
-        # TREND
-        if ema_fast > ema:
-            buy += 2
-        else:
-            sell += 2
+    # MOMENTUM
+    if rsi < 45:
+        score += 1
+        reasons.append("Oversold → Buy pressure")
+    elif rsi > 55:
+        score += 1
+        reasons.append("Overbought → Sell pressure")
 
-        # RSI
-        if rsi < 45:
-            buy += 1
-        elif rsi > 55:
-            sell += 1
+    # VOLATILITY FILTER
+    if vol < 0.0003:
+        return None  # skip weak market
 
-        # VOLATILITY
-        if vol > 0.0005:
-            buy += 1
-            sell += 1
+    # PATTERN
+    if pat != "NONE":
+        score += 2
+        reasons.append(pat)
 
-        # PATTERN BOOST
-        if pat == "BULLISH":
-            buy += 2
-        elif pat == "BEARISH":
-            sell += 2
+    # DECISION
+    direction = "BUY 📈" if ema_fast > ema_slow else "SELL 📉"
 
-        # FINAL DECISION
-        direction = "BUY 📈" if buy >= sell else "SELL 📉"
-        score = max(buy, sell)
+    confidence = min(92, 82 + score * 2)
 
-        confidence = min(96, 80 + score * 2)
+    return direction, confidence, reasons
 
-        return direction, confidence, score
-
-    except:
-        return None
-
-# ===== BEST SIGNAL =====
-def best_signal():
+# ===== SCAN =====
+def scan_market():
     best = None
-    best_score = -1
+    best_score = 0
 
     for name, sym in ASSETS.items():
-        r = analyze(sym)
-        if not r:
+        result = analyze(sym)
+        if not result:
             continue
 
-        direction, confidence, score = r
+        direction, confidence, reasons = result
 
-        if score > best_score:
-            best = (name, direction, confidence)
-            best_score = score
-
-    if best is None:
-        return (
-            random.choice(list(ASSETS.keys())),
-            random.choice(["BUY 📈","SELL 📉"]),
-            random.randint(80,90)
-        )
+        if confidence > best_score:
+            best = (name, direction, confidence, reasons)
+            best_score = confidence
 
     return best
 
-# ===== SESSION =====
-if "history" not in st.session_state:
-    st.session_state.history = []
-
-if "wins" not in st.session_state:
-    st.session_state.wins = 0
-
-if "losses" not in st.session_state:
-    st.session_state.losses = 0
-
 # ===== UI =====
-st.markdown("<h1>💀 FINAL BOSS LEVEL 2 SNIPER</h1>", unsafe_allow_html=True)
+st.markdown("<h1>💀 PRO SNIPER AI (REAL LOGIC)</h1>", unsafe_allow_html=True)
 
-# ===== SIGNAL =====
-if st.button("🎯 GET SNIPER SIGNAL"):
+# ===== BUTTON =====
+if st.button("🔍 SCAN MARKET"):
+    res = scan_market()
 
-    pair, direction, confidence = best_signal()
-    wait = entry_time()
-    dur = duration()
+    if res is None:
+        st.warning("⚠️ Market weak — wait (this saves your money)")
+    else:
+        pair, direction, confidence, reasons = res
+        wait = entry_time()
 
-    st.markdown(f"""
-    <div class="card">
-    <h2>{pair}</h2>
-    <h3>{direction}</h3>
-    ⏳ Entry: {wait} sec<br>
-    🕐 Duration: {dur} min<br>
-    🔥 Confidence: {confidence}%
-    </div>
-    """, unsafe_allow_html=True)
+        st.markdown(f"""
+        <div class="card">
+        <h2>{pair}</h2>
+        <h3>{direction}</h3>
+        ⏳ Entry: {wait}s<br>
+        🔥 Confidence: {confidence}%<br>
+        📊 Reasons: {", ".join(reasons)}
+        </div>
+        """, unsafe_allow_html=True)
 
-    for i in range(wait, -1, -1):
-        st.write(f"⏳ {i}s")
-        time.sleep(1)
+        # countdown
+        for i in range(wait, -1, -1):
+            st.write(f"⏳ {i}s")
+            time.sleep(1)
 
-    st.session_state.history.insert(0,{
-        "pair":pair,
-        "dir":direction,
-        "conf":confidence
-    })
+        st.success("👉 Enter trade NOW (1 min)")
 
-# ===== TRACKING =====
-c1,c2 = st.columns(2)
-
-if c1.button("✅ WIN"):
-    st.session_state.wins += 1
-
-if c2.button("❌ LOSS"):
-    st.session_state.losses += 1
-
-total = st.session_state.wins + st.session_state.losses
-acc = (st.session_state.wins/total*100) if total>0 else 0
-
-st.markdown(f"""
-<div class="card">
-📊 Trades: {total}<br>
-✅ Wins: {st.session_state.wins}<br>
-❌ Losses: {st.session_state.losses}<br>
-🎯 Accuracy: {round(acc,2)}%
-</div>
-""", unsafe_allow_html=True)
-
-# ===== HISTORY =====
-st.markdown("### 📜 History")
-for h in st.session_state.history:
-    st.write(h)
+        st.info("♻️ If first entry loses, re-enter immediately (2nd candle recovery)")
