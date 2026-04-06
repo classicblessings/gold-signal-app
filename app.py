@@ -1,221 +1,194 @@
 import streamlit as st
 import pandas as pd
-import yfinance as yf
-import random
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
+from iqoptionapi.stable_api import IQ_Option
 
-st.set_page_config(page_title="FINAL BOSS AI", layout="centered")
+st.set_page_config(page_title="FINAL BOSS LIVE", layout="centered")
 
 # ===== STYLE =====
 st.markdown("""
 <style>
-body { background-color: #0d1117; color: white; }
-h1 { color: #00ffcc; text-align:center; }
-.stButton>button {
-    background: linear-gradient(90deg,#00ffcc,#0077ff);
-    color:black; border-radius:10px; height:3em; width:100%;
+body {background: linear-gradient(135deg,#020617,#0f172a); color:#e2e8f0;}
+h1 {text-align:center;color:#22c55e;}
+.card {
+background:#020617;
+padding:20px;
+border-radius:15px;
+box-shadow:0 0 25px rgba(0,255,200,0.1);
+margin-top:10px;
 }
 </style>
 """, unsafe_allow_html=True)
 
-# ===== PAIRS =====
-PAIRS = {
-    "EUR/USD OTC":"EURUSD=X",
-    "GBP/USD OTC":"GBPUSD=X",
-    "USD/JPY OTC":"JPY=X",
-    "AUD/USD OTC":"AUDUSD=X",
-    "USD/CAD OTC":"CAD=X",
-    "EUR/JPY OTC":"EURJPY=X",
-    "GBP/JPY OTC":"GBPJPY=X"
-}
+# ===== LOGIN UI =====
+st.title("💀 FINAL BOSS LIVE IQ SNIPER")
 
-# ===== SESSION =====
-def now():
-    return datetime.utcnow() + timedelta(hours=1)
+email = st.text_input("IQ Option Email")
+password = st.text_input("IQ Option Password", type="password")
 
-def entry_time():
-    s = now().second
-    return s if s <= 10 else 60 - s
+connect_btn = st.button("🔗 CONNECT")
 
-# ===== NOTIFY =====
-def notify():
-    st.markdown("""
-    <script>
-    var a=new Audio("https://www.soundjay.com/buttons/sounds/button-3.mp3");
-    a.play(); alert("🚨 SIGNAL!");
-    </script>
-    """, unsafe_allow_html=True)
+if "iq" not in st.session_state:
+    st.session_state.iq = None
 
-# ===== DATA =====
-def get_data(sym):
+if connect_btn:
+    iq = IQ_Option(email, password)
+    iq.connect()
+
+    if iq.check_connect():
+        st.success("✅ Connected to IQ Option")
+        iq.change_balance("PRACTICE")
+        st.session_state.iq = iq
+    else:
+        st.error("❌ Connection Failed")
+
+# ===== ASSETS =====
+ASSETS = [
+    "EURUSD-OTC","GBPUSD-OTC","USDJPY-OTC",
+    "AUDUSD-OTC","EURJPY-OTC","GBPJPY-OTC",
+    "USDCHF-OTC","NZDUSD-OTC"
+]
+
+# ===== GET CANDLES =====
+def get_data(asset):
     try:
-        df = yf.download(sym, interval="1m", period="1d", progress=False)
-        if df is None or df.empty or len(df) < 30:
-            return None
-        df = df[['Open','High','Low','Close']].copy()
-        df = df.apply(pd.to_numeric, errors='coerce').dropna().reset_index(drop=True)
-        return df.tail(50)
+        iq = st.session_state.iq
+        candles = iq.get_candles(asset, 60, 50, time.time())
+
+        df = pd.DataFrame(candles)
+        df = df.rename(columns={
+            "open":"Open","close":"Close",
+            "min":"Low","max":"High"
+        })
+
+        df = df[["Open","High","Low","Close"]]
+        df = df.apply(pd.to_numeric, errors='coerce').dropna()
+        df.reset_index(drop=True, inplace=True)
+
+        return df
     except:
         return None
 
 # ===== INDICATORS =====
-def rsi(df):
-    d = df["Close"].diff()
-    g = d.clip(lower=0).rolling(14).mean()
-    l = -d.clip(upper=0).rolling(14).mean()
-    rs = g / l
-    return (100 - (100/(1+rs))).fillna(50)
+def add_indicators(df):
+    df["EMA"] = df["Close"].ewm(span=20).mean()
+    df["EMA_FAST"] = df["Close"].ewm(span=5).mean()
 
-def pattern(df):
-    if len(df) < 2: return "NONE"
-    a, b = df.iloc[-1], df.iloc[-2]
-    if b["Close"] < b["Open"] and a["Close"] > a["Open"]: return "BULLISH 📈"
-    if b["Close"] > b["Open"] and a["Close"] < a["Open"]: return "BEARISH 📉"
-    return "NONE"
+    delta = df["Close"].diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = -delta.clip(upper=0).rolling(14).mean()
+    rs = gain / loss
+    df["RSI"] = (100-(100/(1+rs))).fillna(50)
 
-# ===== ANALYZE =====
-def analyze(sym):
-    df = get_data(sym)
-    if df is None: return None
+    return df
+
+# ===== ANALYSIS =====
+def analyze(asset):
+    df = get_data(asset)
+    if df is None or len(df) < 30:
+        return None
+
     try:
-        df["EMA"] = df["Close"].ewm(span=20).mean()
-        df["RSI"] = rsi(df)
+        df = add_indicators(df)
 
         c = float(df["Close"].iloc[-1])
-        e = float(df["EMA"].iloc[-1])
-        r = float(df["RSI"].iloc[-1])
+        ema = float(df["EMA"].iloc[-1])
+        ema_fast = float(df["EMA_FAST"].iloc[-1])
+        rsi = float(df["RSI"].iloc[-1])
 
-        trend = "UPTREND" if c > e else "DOWNTREND"
-        pat = pattern(df)
+        trend = "UP" if ema_fast > ema else "DOWN"
 
-        return df, trend, pat, r
+        last_open = float(df["Open"].iloc[-1])
+        last_close = float(df["Close"].iloc[-1])
+
+        candle_up = last_close > last_open
+
+        buy = 0
+        sell = 0
+
+        if trend == "UP": buy += 2
+        else: sell += 2
+
+        if rsi < 45: buy += 1
+        elif rsi > 55: sell += 1
+
+        if candle_up: buy += 1
+        else: sell += 1
+
+        direction = "BUY 📈" if buy >= sell else "SELL 📉"
+        confidence = min(95, 78 + max(buy,sell)*3)
+
+        return direction, confidence
+
     except:
         return None
 
-# ===== SIGNAL ENGINE (ULTRA MODE) =====
+# ===== BEST SIGNAL =====
 def best_signal():
     best = None
-    best_score = -999
+    best_score = -1
 
-    for name, sym in PAIRS.items():
-        r = analyze(sym)
-        if not r: continue
+    for asset in ASSETS:
+        result = analyze(asset)
+        if not result:
+            continue
 
-        df, trend, pat, rsi_val = r
+        direction, confidence = result
 
-        call = 0
-        put = 0
-
-        if trend == "UPTREND": call += 2
-        else: put += 2
-
-        if rsi_val < 45: call += 1
-        elif rsi_val > 55: put += 1
-
-        if "BULLISH" in pat: call += 2
-        elif "BEARISH" in pat: put += 2
-
-        # FORCE DIRECTION
-        if call > put:
-            direction = "CALL 📈"
-        elif put > call:
-            direction = "PUT 📉"
-        else:
-            direction = random.choice(["CALL 📈", "PUT 📉"])
-
-        # SOFT FILTER
-        if call < 2 and put < 2:
-            call += 1
-            put += 1
-
-        score = max(call, put)
-        wait = entry_time()
+        score = confidence
 
         if score > best_score:
-            best = {
-                "pair": name,
-                "dir": direction,
-                "wait": wait,
-                "conf": min(99, 75 + score*3)
-            }
+            best = (asset, direction, confidence)
             best_score = score
 
-    # FORCE SIGNAL ALWAYS
     if best is None:
-        pair = random.choice(list(PAIRS.keys()))
-        best = {
-            "pair": pair,
-            "dir": random.choice(["CALL 📈", "PUT 📉"]),
-            "wait": entry_time(),
-            "conf": random.randint(75, 85)
-        }
+        return (
+            ASSETS[0],
+            "BUY 📈",
+            80
+        )
 
     return best
 
-# ===== SESSION STATE =====
+# ===== TIMER =====
+def entry_time():
+    sec = datetime.now().second
+    return 60 - sec if sec > 5 else sec
+
+# ===== HISTORY =====
 if "history" not in st.session_state:
     st.session_state.history = []
 
-if "wins" not in st.session_state:
-    st.session_state.wins = 0
+# ===== SIGNAL BUTTON =====
+if st.button("🎯 GET LIVE SIGNAL"):
 
-if "losses" not in st.session_state:
-    st.session_state.losses = 0
+    if st.session_state.iq is None:
+        st.warning("⚠️ Connect first")
+    else:
+        pair, direction, confidence = best_signal()
+        wait = entry_time()
 
-# ===== UI =====
-st.markdown("<h1>💀 FINAL BOSS AI</h1>", unsafe_allow_html=True)
+        st.markdown(f"""
+        <div class="card">
+        <h2>{pair}</h2>
+        <h3>{direction}</h3>
+        ⏳ Entry: {wait} sec<br>
+        🔥 Confidence: {confidence}%
+        </div>
+        """, unsafe_allow_html=True)
 
-auto = st.toggle("🔄 AUTO MODE", False)
+        for i in range(wait, -1, -1):
+            st.write(f"⏳ {i}s")
+            time.sleep(1)
 
-# ===== AUTO =====
-if auto:
-    box = st.empty()
-    while True:
-        s = best_signal()
-        with box.container():
-            notify()
-            st.success("🚨 SIGNAL")
-            st.write(s)
-
-            st.session_state.history.insert(0, s)
-            st.session_state.history = st.session_state.history[:10]
-
-        time.sleep(5)
-        st.rerun()
-
-# ===== MANUAL =====
-if st.button("🎯 GET SIGNAL"):
-    s = best_signal()
-    notify()
-    st.success("🚨 SIGNAL")
-    st.write(s)
-
-    st.session_state.history.insert(0, s)
-    st.session_state.history = st.session_state.history[:10]
-
-# ===== TRACK RESULT =====
-st.markdown("### 🎯 MARK RESULT")
-
-col1, col2 = st.columns(2)
-
-if col1.button("✅ WIN"):
-    st.session_state.wins += 1
-
-if col2.button("❌ LOSS"):
-    st.session_state.losses += 1
-
-# ===== DASHBOARD =====
-total = st.session_state.wins + st.session_state.losses
-acc = (st.session_state.wins / total * 100) if total > 0 else 0
-
-st.markdown("### 📊 PERFORMANCE")
-st.write(f"Total Trades: {total}")
-st.write(f"Wins: {st.session_state.wins}")
-st.write(f"Losses: {st.session_state.losses}")
-st.write(f"Accuracy: {round(acc,2)}%")
+        st.session_state.history.insert(0, {
+            "pair":pair,
+            "dir":direction,
+            "conf":confidence
+        })
 
 # ===== HISTORY =====
-st.markdown("### 📜 HISTORY")
+st.subheader("📜 Signal History")
 for h in st.session_state.history:
     st.write(h)
