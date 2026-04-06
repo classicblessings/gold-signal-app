@@ -21,7 +21,16 @@ PAIRS = {
 }
 
 # ===============================
-# TIME (WAT) ✅ FIXED
+# SAFE FLOAT
+# ===============================
+def safe_float(val):
+    try:
+        return float(val)
+    except:
+        return None
+
+# ===============================
+# TIME (WAT)
 # ===============================
 def get_wat_time():
     return datetime.now(timezone.utc) + timedelta(hours=1)
@@ -42,7 +51,7 @@ def get_session():
 # ENTRY TIMING
 # ===============================
 def get_entry_timing():
-    return 60 - get_wat_time().second
+    return max(1, 60 - get_wat_time().second)
 
 # ===============================
 # RSI
@@ -51,39 +60,75 @@ def calculate_rsi(data, period=14):
     delta = data["Close"].diff()
     gain = delta.clip(lower=0).rolling(period).mean()
     loss = -delta.clip(upper=0).rolling(period).mean()
+
     rs = gain / loss
-    return 100 - (100 / (1 + rs))
+    rsi = 100 - (100 / (1 + rs))
+
+    return rsi.fillna(50)
 
 # ===============================
-# DATA
+# DATA (HARDENED)
 # ===============================
 def get_live_data(symbol):
-    df = yf.download(symbol, interval="1m", period="1d", progress=False)
-    return df.tail(50)
+    try:
+        df = yf.download(symbol, interval="1m", period="1d", progress=False)
+
+        if df is None or df.empty or len(df) < 30:
+            return None
+
+        df = df[['Open', 'High', 'Low', 'Close']].copy()
+        df = df.dropna()
+
+        if len(df) < 30:
+            return None
+
+        df = df.reset_index(drop=True)
+
+        return df.tail(50)
+
+    except:
+        return None
 
 # ===============================
-# CANDLE PATTERN
+# PATTERN (SAFE)
 # ===============================
 def detect_pattern(df):
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
+    if df is None or len(df) < 2:
+        return "NONE"
 
-    if prev["Close"] < prev["Open"] and last["Close"] > last["Open"] and last["Close"] > prev["Open"]:
-        return "BULLISH ENGULFING 📈"
+    try:
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
 
-    if prev["Close"] > prev["Open"] and last["Close"] < last["Open"] and last["Close"] < prev["Open"]:
-        return "BEARISH ENGULFING 📉"
+        last_close = safe_float(last["Close"])
+        last_open = safe_float(last["Open"])
+        prev_close = safe_float(prev["Close"])
+        prev_open = safe_float(prev["Open"])
+        last_high = safe_float(last["High"])
+        last_low = safe_float(last["Low"])
 
-    body = abs(last["Close"] - last["Open"])
-    wick = last["High"] - last["Low"]
+        if None in [last_close, last_open, prev_close, prev_open, last_high, last_low]:
+            return "NONE"
 
-    if wick > body * 2:
-        return "PIN BAR 🔄"
+        if prev_close < prev_open and last_close > last_open and last_close > prev_open:
+            return "BULLISH ENGULFING 📈"
 
-    return "NONE"
+        if prev_close > prev_open and last_close < last_open and last_close < prev_open:
+            return "BEARISH ENGULFING 📉"
+
+        body = abs(last_close - last_open)
+        wick = last_high - last_low
+
+        if wick > body * 2:
+            return "PIN BAR 🔄"
+
+        return "NONE"
+
+    except:
+        return "NONE"
 
 # ===============================
-# EXPIRY LOGIC
+# EXPIRY
 # ===============================
 def get_expiry(momentum, rsi):
     if momentum == "STRONG":
@@ -94,103 +139,115 @@ def get_expiry(momentum, rsi):
         return "5 MIN"
 
 # ===============================
-# ANALYSIS
+# ANALYSIS (FULL SAFE)
 # ===============================
 def analyze(symbol):
     df = get_live_data(symbol)
 
-    if df.empty:
+    if df is None:
         return None
 
-    df["EMA"] = df["Close"].ewm(span=20).mean()
-    df["RSI"] = calculate_rsi(df)
+    try:
+        df["EMA"] = df["Close"].ewm(span=20).mean()
+        df["RSI"] = calculate_rsi(df)
 
-    last = df.iloc[-1]
+        last_close = safe_float(df["Close"].iloc[-1])
+        last_ema = safe_float(df["EMA"].iloc[-1])
+        last_rsi = safe_float(df["RSI"].iloc[-1])
 
-    trend = "UPTREND" if last["Close"] > last["EMA"] else "DOWNTREND"
-    rsi = last["RSI"]
+        if None in [last_close, last_ema, last_rsi]:
+            return None
 
-    momentum = "STRONG" if abs(df["Close"].iloc[-1] - df["Close"].iloc[-5]) > 0 else "WEAK"
+        trend = "UPTREND" if last_close > last_ema else "DOWNTREND"
+        rsi = last_rsi
 
-    pattern = detect_pattern(df)
+        momentum = "STRONG" if abs(df["Close"].iloc[-1] - df["Close"].iloc[-5]) > 0 else "WEAK"
 
-    # STRUCTURE
-    recent_high = df["High"].rolling(10).max().iloc[-1]
-    recent_low = df["Low"].rolling(10).min().iloc[-1]
+        pattern = detect_pattern(df)
 
-    near_high = last["Close"] >= recent_high * 0.999
-    near_low = last["Close"] <= recent_low * 1.001
+        recent_high = df["High"].rolling(10).max().iloc[-1]
+        recent_low = df["Low"].rolling(10).min().iloc[-1]
 
-    structure = "NONE"
-    if near_high:
-        structure = "RESISTANCE 🔴"
-    elif near_low:
-        structure = "SUPPORT 🟢"
+        if pd.isna(recent_high) or pd.isna(recent_low):
+            return None
 
-    # FAKE BREAKOUT
-    fake_breakout = False
-    if last["High"] > recent_high and last["Close"] < recent_high:
-        fake_breakout = True
-    if last["Low"] < recent_low and last["Close"] > recent_low:
-        fake_breakout = True
+        near_high = last_close >= recent_high * 0.999
+        near_low = last_close <= recent_low * 1.001
 
-    expiry = get_expiry(momentum, rsi)
+        structure = "NONE"
+        if near_high:
+            structure = "RESISTANCE 🔴"
+        elif near_low:
+            structure = "SUPPORT 🟢"
 
-    return trend, rsi, momentum, pattern, expiry, structure, fake_breakout
+        fake_breakout = False
+        if last_close < recent_high and df["High"].iloc[-1] > recent_high:
+            fake_breakout = True
+        if last_close > recent_low and df["Low"].iloc[-1] < recent_low:
+            fake_breakout = True
+
+        expiry = get_expiry(momentum, rsi)
+
+        return trend, rsi, momentum, pattern, expiry, structure, fake_breakout
+
+    except:
+        return None
 
 # ===============================
-# SIGNAL ENGINE
+# SIGNAL ENGINE (SAFE)
 # ===============================
 def generate_signal(confidence):
-    pair_name, symbol = random.choice(list(PAIRS.items()))
+    try:
+        pair_name, symbol = random.choice(list(PAIRS.items()))
 
-    result = analyze(symbol)
-    if not result:
+        result = analyze(symbol)
+        if not result:
+            return None
+
+        trend, rsi, momentum, pattern, expiry, structure, fake_breakout = result
+        wait = get_entry_timing()
+
+        if wait > 50:
+            return None
+
+        direction = None
+
+        if (
+            trend == "UPTREND"
+            and rsi < 40
+            and "BULLISH" in pattern
+            and structure == "SUPPORT 🟢"
+            and not fake_breakout
+        ):
+            direction = "CALL 📈"
+
+        elif (
+            trend == "DOWNTREND"
+            and rsi > 60
+            and "BEARISH" in pattern
+            and structure == "RESISTANCE 🔴"
+            and not fake_breakout
+        ):
+            direction = "PUT 📉"
+
+        else:
+            return None
+
+        return {
+            "pair": pair_name,
+            "direction": direction,
+            "confidence": random.randint(confidence, 99),
+            "wait": wait,
+            "trend": trend,
+            "rsi": round(rsi, 2),
+            "momentum": momentum,
+            "pattern": pattern,
+            "expiry": expiry,
+            "structure": structure
+        }
+
+    except:
         return None
-
-    trend, rsi, momentum, pattern, expiry, structure, fake_breakout = result
-    wait = get_entry_timing()
-
-    if wait > 50:
-        return None
-
-    direction = None
-
-    if (
-        trend == "UPTREND"
-        and rsi < 40
-        and "BULLISH" in pattern
-        and structure == "SUPPORT 🟢"
-        and not fake_breakout
-    ):
-        direction = "CALL 📈"
-
-    elif (
-        trend == "DOWNTREND"
-        and rsi > 60
-        and "BEARISH" in pattern
-        and structure == "RESISTANCE 🔴"
-        and not fake_breakout
-    ):
-        direction = "PUT 📉"
-
-    else:
-        return None
-
-    conf = random.randint(confidence, 99)
-
-    return {
-        "pair": pair_name,
-        "direction": direction,
-        "confidence": conf,
-        "wait": wait,
-        "trend": trend,
-        "rsi": round(rsi, 2),
-        "momentum": momentum,
-        "pattern": pattern,
-        "expiry": expiry,
-        "structure": structure
-    }
 
 # ===============================
 # UI
@@ -254,4 +311,4 @@ if st.button("⚡ SCAN NOW"):
         ### ⏳ ENTRY IN: {wait} sec
         """)
     else:
-        st.warning("No data available")
+        st.warning("No valid market data — try again")
