@@ -1,179 +1,73 @@
 import streamlit as st
 import pandas as pd
-import yfinance as yf
-import time
-from datetime import datetime
+import numpy as np
 
-st.set_page_config(page_title="AI MULTI ASSET BOT", layout="wide")
+st.set_page_config(page_title="Trade AI", layout="centered")
 
-# ===== STYLE =====
-st.markdown("""
-<style>
-body {background:#0f172a; color:white; font-family:Arial;}
-.header {text-align:center; font-size:28px; color:#22c55e;}
-.box {
-    background:#020617;
-    padding:15px;
-    border-radius:10px;
-    margin:10px 0;
-}
-.buy {color:#22c55e;}
-.sell {color:#ef4444;}
-</style>
-""", unsafe_allow_html=True)
+st.title("🔥 Trade AI Signal (PRO)")
 
-# ===== SESSION =====
-if "history" not in st.session_state:
-    st.session_state.history = []
-
-# ===== ASSETS (MORE OPTIONS) =====
-ASSETS = {
-"EURUSD":"EURUSD=X",
-"GBPUSD":"GBPUSD=X",
-"USDJPY":"JPY=X",
-"AUDUSD":"AUDUSD=X",
-"EURJPY":"EURJPY=X",
-"GBPJPY":"GBPJPY=X",
-"XAUUSD":"GC=F",
-"US30":"^DJI",
-"NAS100":"^NDX"
-}
-
-# ===== DATA =====
-def get_data(sym):
-    try:
-        df = yf.download(sym, interval="1m", period="1d", progress=False)
-        if df is None or df.empty or len(df) < 80:
-            return None
-
-        df = df[['Open','High','Low','Close']].copy()
-        df = df.apply(pd.to_numeric, errors='coerce').dropna()
-        df = df[~df.index.duplicated(keep='last')]
-        df.reset_index(drop=True, inplace=True)
-
-        return df.tail(80)
-    except:
-        return None
-
-# ===== INDICATORS =====
-def indicators(df):
-    df["EMA5"] = df["Close"].ewm(span=5).mean()
-    df["EMA20"] = df["Close"].ewm(span=20).mean()
-    df["VOL"] = df["Close"].rolling(10).std().fillna(0)
+# --------- FAKE MARKET DATA (Replace later with real API) ----------
+def generate_data():
+    price = np.cumsum(np.random.randn(100)) + 100
+    df = pd.DataFrame(price, columns=["close"])
     return df
 
-# ===== ANALYZE =====
-def analyze(sym):
-    df = get_data(sym)
-    if df is None:
-        return None
+df = generate_data()
 
-    try:
-        df = indicators(df)
+# --------- INDICATORS ----------
+def calculate_rsi(data, period=14):
+    delta = data.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
 
-        ema5 = float(df["EMA5"].iloc[-1].item())
-        ema20 = float(df["EMA20"].iloc[-1].item())
-        vol = float(df["VOL"].iloc[-1].item())
+df["RSI"] = calculate_rsi(df["close"])
 
-        if vol < 0.0003:
-            return None
+df["EMA"] = df["close"].ewm(span=20).mean()
 
-        score = 0
-        reasons = []
+# --------- SIGNAL LOGIC ----------
+def get_signal():
+    rsi = df["RSI"].iloc[-1]
+    price = df["close"].iloc[-1]
+    ema = df["EMA"].iloc[-1]
 
-        if ema5 > ema20:
-            direction = "BUY"
-            score += 2
-            reasons.append("Trend Up")
-        else:
-            direction = "SELL"
-            score += 2
-            reasons.append("Trend Down")
+    if rsi < 30 and price > ema:
+        return "BUY", 80
+    elif rsi > 70 and price < ema:
+        return "SELL", 78
+    else:
+        return "WAIT", 60
 
-        confidence = min(92, 85 + score * 2)
+signal, confidence = get_signal()
 
-        return direction, confidence, reasons
+# --------- UI ----------
+st.subheader("📊 Pair: EUR/USD OTC")
 
-    except:
-        return None
+st.metric("Signal", signal)
+st.metric("Confidence", f"{confidence}%")
 
-# ===== GET MULTIPLE SIGNALS =====
-def get_signals():
-    signals = []
+# --------- ENTRY TIMER ----------
+import time
 
-    for name, sym in ASSETS.items():
-        result = analyze(sym)
+st.subheader("⏱ Entry Timer")
 
-        if result is None:
-            continue
+timer = st.empty()
 
-        direction, confidence, reasons = result
+for i in range(5, 0, -1):
+    timer.write(f"Enter in: {i} sec")
+    time.sleep(1)
 
-        if confidence >= 88:
-            signals.append((name, direction, confidence, reasons))
+st.success("🚀 Enter Trade Now!")
 
-    # sort best first
-    signals = sorted(signals, key=lambda x: x[2], reverse=True)
+# --------- BUTTONS ----------
+col1, col2 = st.columns(2)
 
-    return signals[:5]  # top 5
-
-# ===== UI =====
-st.markdown('<div class="header">🤖 MULTI-ASSET AI BOT</div>', unsafe_allow_html=True)
-
-col1, col2 = st.columns([2,1])
-
-# ===== AUTO MODE =====
 with col1:
-    auto = st.toggle("⚡ AUTO MODE", True)
+    st.button("🟢 BUY")
 
-    if auto:
-        st.info("Scanning all assets...")
-
-        signals = get_signals()
-
-        if signals:
-            now = datetime.now().strftime("%H:%M:%S")
-
-            for pair, direction, confidence, reasons in signals:
-
-                entry = {
-                    "pair": pair,
-                    "direction": direction,
-                    "confidence": confidence,
-                    "time": now
-                }
-
-                st.session_state.history.insert(0, entry)
-
-                color = "buy" if direction == "BUY" else "sell"
-
-                st.markdown(f"""
-                <div class="box">
-                <b>{pair}</b><br>
-                <span class="{color}">{direction}</span><br>
-                🔥 {confidence}%<br>
-                🕐 2 MIN TRADE<br>
-                ⏱ {now}
-                </div>
-                """, unsafe_allow_html=True)
-
-        else:
-            st.warning("No strong setups — WAIT")
-
-        time.sleep(6)
-        st.rerun()
-
-# ===== HISTORY =====
 with col2:
-    st.subheader("📜 History")
+    st.button("🔴 SELL")
 
-    for h in st.session_state.history[:10]:
-        color = "buy" if h["direction"] == "BUY" else "sell"
-
-        st.markdown(f"""
-        <div class="box">
-        {h['pair']} - <span class="{color}">{h['direction']}</span><br>
-        🔥 {h['confidence']}%<br>
-        ⏱ {h['time']}
-        </div>
-        """, unsafe_allow_html=True)
+# --------- FOOTER ----------
+st.info("Smart AI Trading Assistant (No fake promises)")
