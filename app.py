@@ -1,73 +1,117 @@
 import streamlit as st
 import pandas as pd
+import yfinance as yf
 import numpy as np
+import os
 
-st.set_page_config(page_title="Trade AI", layout="centered")
+st.set_page_config(page_title="Sniper AI", layout="centered")
 
-st.title("🔥 Trade AI Signal (PRO)")
+st.title("🔥 SNIPER AI (SIMPLE PRO)")
 
-# --------- FAKE MARKET DATA (Replace later with real API) ----------
-def generate_data():
-    price = np.cumsum(np.random.randn(100)) + 100
-    df = pd.DataFrame(price, columns=["close"])
-    return df
+pairs = ["EURUSD=X", "GBPUSD=X", "AUDUSD=X", "USDJPY=X"]
 
-df = generate_data()
+@st.cache_data(ttl=60)
+def get_data(pair):
+    try:
+        df = yf.download(pair, period="1d", interval="1m", progress=False)
+        df.dropna(inplace=True)
+        return df
+    except:
+        return pd.DataFrame()
 
-# --------- INDICATORS ----------
-def calculate_rsi(data, period=14):
+def rsi(data, period=14):
     delta = data.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    gain = delta.clip(lower=0).rolling(period).mean()
+    loss = -delta.clip(upper=0).rolling(period).mean()
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-df["RSI"] = calculate_rsi(df["close"])
+def analyze(df):
+    df["RSI"] = rsi(df["Close"])
+    df["EMA20"] = df["Close"].ewm(span=20).mean()
+    df["EMA50"] = df["Close"].ewm(span=50).mean()
 
-df["EMA"] = df["close"].ewm(span=20).mean()
+    score = 0
 
-# --------- SIGNAL LOGIC ----------
-def get_signal():
-    rsi = df["RSI"].iloc[-1]
-    price = df["close"].iloc[-1]
-    ema = df["EMA"].iloc[-1]
+    try:
+        if df["Close"].iloc[-1] > df["EMA20"].iloc[-1] > df["EMA50"].iloc[-1]:
+            score += 2
+        if df["Close"].iloc[-1] < df["EMA20"].iloc[-1] < df["EMA50"].iloc[-1]:
+            score -= 2
 
-    if rsi < 30 and price > ema:
-        return "BUY", 80
-    elif rsi > 70 and price < ema:
-        return "SELL", 78
+        if df["RSI"].iloc[-1] < 30:
+            score += 2
+        elif df["RSI"].iloc[-1] > 70:
+            score -= 2
+    except:
+        return 0
+
+    return score
+
+best_pair = None
+best_score = 0
+best_df = None
+
+for pair in pairs:
+    df = get_data(pair)
+    if df.empty:
+        continue
+
+    score = analyze(df)
+
+    if abs(score) > abs(best_score):
+        best_score = score
+        best_pair = pair
+        best_df = df
+
+def get_signal(score):
+    if score >= 3:
+        return "🟢 STRONG UP"
+    elif score <= -3:
+        return "🔴 STRONG DOWN"
     else:
-        return "WAIT", 60
+        return "🟡 WAIT"
 
-signal, confidence = get_signal()
+signal = get_signal(best_score)
 
-# --------- UI ----------
-st.subheader("📊 Pair: EUR/USD OTC")
+# -------- SIMPLE LEARNING SYSTEM ----------
+file = "history.csv"
 
-st.metric("Signal", signal)
-st.metric("Confidence", f"{confidence}%")
+if not os.path.exists(file):
+    pd.DataFrame(columns=["pair", "signal"]).to_csv(file, index=False)
 
-# --------- ENTRY TIMER ----------
-import time
+hist = pd.read_csv(file)
 
-st.subheader("⏱ Entry Timer")
+if signal != "🟡 WAIT" and best_pair:
+    new = pd.DataFrame([[best_pair, signal]], columns=["pair", "signal"])
+    hist = pd.concat([hist, new])
+    hist.to_csv(file, index=False)
 
-timer = st.empty()
+total = len(hist)
+up = len(hist[hist["signal"] == "🟢 STRONG UP"])
+down = len(hist[hist["signal"] == "🔴 STRONG DOWN"])
 
-for i in range(5, 0, -1):
-    timer.write(f"Enter in: {i} sec")
-    time.sleep(1)
+accuracy = round((max(up, down) / total) * 100, 2) if total > 0 else 0
 
-st.success("🚀 Enter Trade Now!")
+confidence = min(95, 60 + abs(best_score)*5 + accuracy/10)
 
-# --------- BUTTONS ----------
-col1, col2 = st.columns(2)
+# -------- UI ----------
+if best_pair:
+    st.subheader(f"📊 Best Pair: {best_pair}")
+    st.metric("Signal", signal)
+    st.metric("Confidence", f"{confidence}%")
+    st.metric("Accuracy", f"{accuracy}%")
 
-with col1:
-    st.button("🟢 BUY")
+    if "STRONG" in signal:
+        st.warning("🚨 SNIPER SIGNAL!")
 
-with col2:
-    st.button("🔴 SELL")
+    st.line_chart(best_df["Close"].tail(100))
+else:
+    st.error("No data (check internet)")
 
-# --------- FOOTER ----------
-st.info("Smart AI Trading Assistant (No fake promises)")
+st.subheader("📈 History")
+st.dataframe(hist.tail(10))
+
+if st.button("🔄 Refresh"):
+    st.cache_data.clear()
+    st.rerun()
