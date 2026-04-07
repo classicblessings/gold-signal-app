@@ -4,26 +4,28 @@ import yfinance as yf
 import time
 from datetime import datetime
 
-st.set_page_config(page_title="FINAL BOSS AUTO SNIPER", layout="centered")
+st.set_page_config(page_title="LEVEL 3 INSTITUTIONAL BOT", layout="wide")
 
 # ===== STYLE =====
 st.markdown("""
 <style>
-body {
-background: linear-gradient(135deg,#020617,#0f172a);
-color:#e2e8f0;
-font-family: 'Segoe UI';
+body {background:#0f172a; color:white; font-family:Arial;}
+.header {text-align:center; font-size:30px; color:#22c55e;}
+.box {
+    background:#020617;
+    padding:15px;
+    border-radius:12px;
+    margin:10px 0;
+    box-shadow:0 0 12px rgba(0,255,200,0.2);
 }
-h1 {text-align:center;color:#22c55e;}
-.card {
-background:#020617;
-padding:20px;
-border-radius:15px;
-margin-top:10px;
-box-shadow:0 0 20px rgba(0,255,200,0.1);
-}
+.buy {color:#22c55e; font-weight:bold;}
+.sell {color:#ef4444; font-weight:bold;}
 </style>
 """, unsafe_allow_html=True)
+
+# ===== SESSION =====
+if "history" not in st.session_state:
+    st.session_state.history = []
 
 # ===== ASSETS =====
 ASSETS = {
@@ -36,145 +38,204 @@ ASSETS = {
 "XAUUSD":"GC=F"
 }
 
-# ===== TIME =====
-def entry_time():
-    sec = datetime.utcnow().second
-    return 60 - sec if sec > 5 else sec
-
 # ===== DATA =====
 def get_data(sym):
     try:
         df = yf.download(sym, interval="1m", period="1d", progress=False)
 
-        if df is None or df.empty or len(df) < 60:
+        if df is None or df.empty or len(df) < 100:
             return None
 
         df = df[['Open','High','Low','Close']].copy()
         df = df.apply(pd.to_numeric, errors='coerce').dropna()
+        df = df[~df.index.duplicated(keep='last')]
         df.reset_index(drop=True, inplace=True)
 
-        return df.tail(60)
+        return df.tail(100)
 
     except:
         return None
 
 # ===== INDICATORS =====
 def indicators(df):
-    df["EMA_FAST"] = df["Close"].ewm(span=5).mean()
-    df["EMA_SLOW"] = df["Close"].ewm(span=20).mean()
-
-    delta = df["Close"].diff()
-    gain = delta.clip(lower=0).rolling(14).mean()
-    loss = -delta.clip(upper=0).rolling(14).mean()
-    rs = gain / loss
-    df["RSI"] = (100 - (100/(1+rs))).fillna(50)
-
+    df["EMA5"] = df["Close"].ewm(span=5).mean()
+    df["EMA20"] = df["Close"].ewm(span=20).mean()
     df["VOL"] = df["Close"].rolling(10).std().fillna(0)
-
     return df
 
-# ===== PATTERN =====
-def pattern(df):
-    o1,c1 = df["Open"].iloc[-2], df["Close"].iloc[-2]
-    o2,c2 = df["Open"].iloc[-1], df["Close"].iloc[-1]
+# ===== ORDER BLOCK =====
+def order_block(df):
+    try:
+        last = df.iloc[-5:]
 
-    if c2 > o2 and c1 < o1 and c2 > o1:
-        return "Bullish Engulfing"
-    elif c2 < o2 and c1 > o1 and c2 < o1:
-        return "Bearish Engulfing"
-    return "None"
+        high = float(last["High"].max())
+        low = float(last["Low"].min())
+        close = float(df["Close"].iloc[-1].item())
 
-# ===== ANALYSIS =====
+        if close > high:
+            return "BUY", "Breakout OB"
+        elif close < low:
+            return "SELL", "Breakdown OB"
+
+        return None, None
+    except:
+        return None, None
+
+# ===== LIQUIDITY =====
+def liquidity(df):
+    try:
+        highs = df["High"]
+        lows = df["Low"]
+
+        last_high = float(highs.iloc[-2].item())
+        prev_high = float(highs.iloc[-6:-2].max())
+
+        last_low = float(lows.iloc[-2].item())
+        prev_low = float(lows.iloc[-6:-2].min())
+
+        close = float(df["Close"].iloc[-1].item())
+
+        if last_high > prev_high and close < last_high:
+            return "SELL", "Liquidity Grab High"
+        elif last_low < prev_low and close > last_low:
+            return "BUY", "Liquidity Grab Low"
+
+        return None, None
+    except:
+        return None, None
+
+# ===== ANALYZE =====
 def analyze(sym):
     df = get_data(sym)
     if df is None:
         return None
 
-    df = indicators(df)
+    try:
+        df = indicators(df)
 
-    ema_fast = df["EMA_FAST"].iloc[-1]
-    ema_slow = df["EMA_SLOW"].iloc[-1]
-    rsi = df["RSI"].iloc[-1]
-    vol = df["VOL"].iloc[-1]
-    pat = pattern(df)
+        ema5 = float(df["EMA5"].iloc[-1].item())
+        ema20 = float(df["EMA20"].iloc[-1].item())
+        vol = float(df["VOL"].iloc[-1].item())
 
-    # ===== FILTER (IMPORTANT) =====
-    if vol < 0.0003:
-        return None  # skip weak market
+        ob_dir, ob_reason = order_block(df)
+        liq_dir, liq_reason = liquidity(df)
 
-    score = 0
-    reasons = []
+        if vol < 0.0003:
+            return None
 
-    # TREND
-    if ema_fast > ema_slow:
-        direction = "BUY 📈"
-        score += 2
-        reasons.append("Uptrend")
-    else:
-        direction = "SELL 📉"
-        score += 2
-        reasons.append("Downtrend")
+        score = 0
+        reasons = []
 
-    # RSI
-    if rsi < 45:
-        score += 1
-        reasons.append("Oversold")
-    elif rsi > 55:
-        score += 1
-        reasons.append("Overbought")
+        # PRIORITY: liquidity
+        if liq_dir:
+            direction = liq_dir
+            score += 3
+            reasons.append(liq_reason)
 
-    # PATTERN BOOST
-    if pat != "None":
-        score += 2
-        reasons.append(pat)
+        # THEN order block
+        elif ob_dir:
+            direction = ob_dir
+            score += 2
+            reasons.append(ob_reason)
 
-    confidence = min(92, 80 + score * 2)
+        else:
+            if ema5 > ema20:
+                direction = "BUY"
+                reasons.append("Trend Up")
+            else:
+                direction = "SELL"
+                reasons.append("Trend Down")
+            score += 1
 
-    return direction, confidence, reasons
+        confidence = min(97, 85 + score * 3)
 
-# ===== AUTO SIGNAL =====
+        return direction, confidence, reasons
+
+    except:
+        return None
+
+# ===== SIGNAL =====
 def get_signal():
     best = None
     best_score = 0
 
     for name, sym in ASSETS.items():
         result = analyze(sym)
-        if not result:
+
+        if result is None:
             continue
 
         direction, confidence, reasons = result
 
-        if confidence > best_score:
+        if confidence > best_score and confidence >= 88:
             best = (name, direction, confidence, reasons)
             best_score = confidence
 
     return best
 
 # ===== UI =====
-st.markdown("<h1>💀 FINAL BOSS AUTO SNIPER</h1>", unsafe_allow_html=True)
+st.markdown('<div class="header">🏦 LEVEL 3 INSTITUTIONAL BOT</div>', unsafe_allow_html=True)
 
-if st.button("🎯 GET STRONG SIGNAL"):
+col1, col2 = st.columns([2,1])
 
-    signal = get_signal()
+# ===== AUTO BOT =====
+with col1:
+    auto = st.toggle("⚡ AUTO INSTITUTIONAL MODE", True)
 
-    if signal is None:
-        st.warning("⚠️ Market not good — WAIT (this protects your money)")
-    else:
-        pair, direction, confidence, reasons = signal
-        wait = entry_time()
+    if auto:
+        st.info("Scanning institutional setups...")
+
+        signal = get_signal()
+
+        if signal:
+            pair, direction, confidence, reasons = signal
+            now = datetime.now().strftime("%H:%M:%S")
+
+            entry = {
+                "pair": pair,
+                "direction": direction,
+                "confidence": confidence,
+                "time": now,
+                "reason": ", ".join(reasons),
+                "retry": "WAIT"
+            }
+
+            st.session_state.history.insert(0, entry)
+
+            color = "buy" if direction == "BUY" else "sell"
+
+            st.markdown(f"""
+            <div class="box">
+            <b>{pair}</b><br>
+            <span class="{color}">{direction}</span><br>
+            🔥 {confidence}%<br>
+            🕐 Trade: 2 MIN<br>
+            🔁 Retry: If loss, re-enter once<br>
+            ⏱ {now}<br>
+            📊 {entry['reason']}
+            </div>
+            """, unsafe_allow_html=True)
+
+        else:
+            st.warning("No institutional setup... waiting")
+
+        time.sleep(5)
+        st.rerun()
+
+# ===== HISTORY =====
+with col2:
+    st.subheader("📜 Live Feed")
+
+    if len(st.session_state.history) == 0:
+        st.write("No signals yet...")
+
+    for h in st.session_state.history[:10]:
+        color = "buy" if h["direction"] == "BUY" else "sell"
 
         st.markdown(f"""
-        <div class="card">
-        <h2>{pair}</h2>
-        <h3>{direction}</h3>
-        ⏳ Entry: {wait}s<br>
-        🔥 Confidence: {confidence}%<br>
-        📊 Reason: {", ".join(reasons)}
+        <div class="box">
+        {h['pair']} - <span class="{color}">{h['direction']}</span><br>
+        🔥 {h['confidence']}%<br>
+        ⏱ {h['time']}
         </div>
         """, unsafe_allow_html=True)
-
-        for i in range(wait, -1, -1):
-            st.write(f"⏳ {i}s")
-            time.sleep(1)
-
-        st.success("👉 Enter trade NOW (1 minute)")
