@@ -2,10 +2,10 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 import requests
 
-# ================= SAFE IQ IMPORT =================
+# ================= SAFE IQ OPTION =================
 try:
     from iqoptionapi.stable_api import IQ_Option
     IQ_AVAILABLE = True
@@ -24,16 +24,16 @@ ASSETS = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY"]
 TIMEFRAME = 60
 MIN_SCORE = 85
 
-# 1–2 MIN INTERVAL CONTROL
+# INTERVAL CONTROL
 MIN_INTERVAL = 60
 MAX_INTERVAL = 120
 
-# ================= SESSION STATE =================
-if "last_signal_time" not in st.session_state:
-    st.session_state.last_signal_time = None
+# ================= STATE =================
+if "last_time" not in st.session_state:
+    st.session_state.last_time = None
 
-if "last_signal_pair" not in st.session_state:
-    st.session_state.last_signal_pair = None
+if "last_pair" not in st.session_state:
+    st.session_state.last_pair = None
 
 # ================= CONNECT =================
 @st.cache_resource
@@ -53,7 +53,7 @@ Iq = connect()
 def send_telegram(msg):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": CHAT_ID, "text": msg}, timeout=5)
+        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
     except:
         pass
 
@@ -93,7 +93,7 @@ def smart_filter(df):
     except:
         return False
 
-# ================= STRATEGY =================
+# ================= STRONG CONFIRMATION =================
 def generate_signal(df):
     try:
         latest = df.iloc[-1]
@@ -104,6 +104,7 @@ def generate_signal(df):
 
         ma = df['close'].rolling(20).mean().iloc[-1]
 
+        # TREND
         if latest['close'] > ma:
             direction = "BUY"
             score += 25
@@ -113,6 +114,7 @@ def generate_signal(df):
             score += 25
             reasons.append("Trend Down")
 
+        # BREAKOUT
         if direction == "BUY" and latest['close'] > prev['high']:
             score += 20
             reasons.append("Breakout")
@@ -121,14 +123,15 @@ def generate_signal(df):
             score += 20
             reasons.append("Breakout")
 
+        # MOMENTUM
         body = abs(latest['close'] - latest['open'])
         rng = latest['high'] - latest['low']
 
         if rng > 0 and body / rng > 0.6:
             score += 20
-            reasons.append("Momentum")
+            reasons.append("Strong Candle")
 
-        # liquidity fake breakout
+        # LIQUIDITY (FAKE BREAKOUT)
         if latest['high'] > prev['high'] and latest['close'] < prev['high']:
             direction = "SELL"
             score += 25
@@ -165,104 +168,130 @@ def find_best_pair():
 
     return best
 
-# ================= SPAM FILTER =================
-def can_send_signal(asset):
+# ================= ANTI-SPAM =================
+def can_signal(asset):
     now = datetime.now()
 
-    if st.session_state.last_signal_time is None:
+    if st.session_state.last_time is None:
         return True
 
-    diff = (now - st.session_state.last_signal_time).seconds
+    diff = (now - st.session_state.last_time).seconds
 
-    # enforce 1–2 min gap
     if diff < MIN_INTERVAL:
         return False
 
-    # avoid same pair repeatedly
-    if asset == st.session_state.last_signal_pair and diff < MAX_INTERVAL:
+    if asset == st.session_state.last_pair and diff < MAX_INTERVAL:
         return False
 
     return True
 
 def update_signal(asset):
-    st.session_state.last_signal_time = datetime.now()
-    st.session_state.last_signal_pair = asset
+    st.session_state.last_time = datetime.now()
+    st.session_state.last_pair = asset
 
-# ================= UI =================
+# ================= MOBILE UI =================
 st.set_page_config(layout="centered")
 
 st.markdown("""
 <style>
 body {background:#0e1117;color:white;}
 .card {
-    background:#111827;
-    padding:20px;
-    border-radius:20px;
+    background:#1f2937;
+    padding:18px;
+    border-radius:18px;
     text-align:center;
-    margin-bottom:15px;
+    margin-bottom:12px;
 }
-.big {font-size:28px;font-weight:bold;}
+.big {font-size:26px;font-weight:bold;}
 .green {color:#00ff99;}
+.yellow {color:#facc15;}
 </style>
 """, unsafe_allow_html=True)
 
 st.title("📡 Signal Radar PRO")
 
-# STATUS
 if IQ_AVAILABLE:
     st.success("🟢 Live Mode")
 else:
     st.warning("⚠️ Demo Mode")
 
-# ================= SCAN BUTTON =================
-if st.button("🔍 Scan Market"):
+# ================= SCAN =================
+if st.button("🔍 Scan Signal"):
 
     best = find_best_pair()
 
     if not best:
-        st.warning("No valid setup found")
-    else:
-        asset, direction, score, reasons = best
+        st.warning("No valid setup")
+        st.stop()
 
-        if score < MIN_SCORE:
-            st.warning("No strong signal")
-        else:
-            if not can_send_signal(asset):
-                st.warning("⏳ Waiting interval (anti-spam active)")
-            else:
-                update_signal(asset)
+    asset, direction, score, reasons = best
 
-                # UI
-                st.markdown(f"""
-                <div class="card">
-                <div class="big">{direction}</div>
-                <div>{asset}</div>
-                </div>
-                """, unsafe_allow_html=True)
+    if score < MIN_SCORE:
+        st.warning("Weak signal")
+        st.stop()
 
-                st.markdown(f"""
-                <div class="card">
-                <div>Confidence</div>
-                <div class="green big">{score}%</div>
-                </div>
-                """, unsafe_allow_html=True)
+    if not can_signal(asset):
+        st.warning("⏳ Wait 1–2 min interval")
+        st.stop()
 
-                st.markdown("### 🧠 Breakdown")
-                for r in reasons:
-                    st.write(f"✔ {r}")
+    update_signal(asset)
 
-                msg = f"""
+    # ENTRY TIME
+    now = datetime.now()
+    entry = now.replace(second=0, microsecond=0)
+
+    if now.second > 0:
+        entry = entry.replace(minute=now.minute + 1)
+
+    entry_time = entry.strftime("%H:%M:%S")
+
+    # ================= UI OUTPUT =================
+    st.markdown(f"""
+    <div class="card">
+    <div class="big">{direction}</div>
+    <div>{asset}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <div class="card">
+    Confidence<br>
+    <div class="green big">{score}%</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <div class="card">
+    ⏰ Entry Time<br>
+    <div class="big">{entry_time}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # MARTINGALE DISPLAY
+    st.markdown("""
+    ### ⚡ Martingale Plan
+    M1 → next candle  
+    M2 → +2 min  
+    M3 → +3 min  
+    """)
+
+    st.markdown("### 🧠 Breakdown")
+    for r in reasons:
+        st.write(f"✔ {r}")
+
+    # TELEGRAM
+    msg = f"""
 🚀 SIGNAL
 
 Pair: {asset}
 Direction: {direction}
 Confidence: {score}%
 
+⏰ Entry: {entry_time}
+
+Martingale:
+M1 / M2 / M3
+
 🧠 {' | '.join(reasons)}
 """
-                send_telegram(msg)
-
-# ================= AUTO REFRESH =================
-st.caption("Auto refresh every 20 seconds")
-time.sleep(20)
-st.rerun()
+    send_telegram(msg)
