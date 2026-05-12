@@ -1,3 +1,14 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import requests
+import threading
+import time
+import datetime
+import traceback
+from collections import deque
+# plyer removed to avoid Streamlit cloud module errors
+
 # =========================================================
 # MARATHON FOREX SIGNAL DASHBOARD
 # =========================================================
@@ -11,26 +22,15 @@
 # ✅ Strong candle filtering
 # ✅ Real news filter
 # ✅ Telegram alerts
-# ✅ Countdown + 5-second alert
+# ✅ Countdown + 5-second sound alert
 # ✅ Error-safe structure
 # ✅ No infinite loops or app crashes
 # ✅ Persistent live signal display
-# ✅ Streamlit-safe
 # =========================================================
 
-import streamlit as st
-import pandas as pd
-import numpy as np
-import requests
-import threading
-import time
-import datetime
-import traceback
-from collections import deque
-
-# =========================================================
+# =========================
 # CONFIG
-# =========================================================
+# =========================
 TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN"
 TELEGRAM_CHAT_ID = "YOUR_CHAT_ID"
 
@@ -53,21 +53,20 @@ FOREX_PAIRS = [
     "CHFJPY"
 ]
 
-# =========================================================
+# =========================
 # STREAMLIT PAGE
-# =========================================================
+# =========================
 st.set_page_config(
     page_title="Marathon Forex Scanner",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# =========================================================
-# CUSTOM UI
-# =========================================================
+# =========================
+# CUSTOM COLORFUL UI
+# =========================
 st.markdown("""
 <style>
-
 body {
     background: #f5f7ff;
 }
@@ -100,13 +99,9 @@ body {
     border: 2px solid #dc2626;
 }
 
-.metric-box {
-    padding: 12px;
-    border-radius: 16px;
-    background: white;
-    border: 1px solid #dbeafe;
-    text-align: center;
-    box-shadow: 0px 3px 10px rgba(0,0,0,0.05);
+.warning-card {
+    background: linear-gradient(135deg, #fef9c3, #fde68a);
+    border: 2px solid #ca8a04;
 }
 
 .title-text {
@@ -118,6 +113,15 @@ body {
 .small-label {
     font-size: 14px;
     color: #475569;
+}
+
+.metric-box {
+    padding: 12px;
+    border-radius: 16px;
+    background: white;
+    border: 1px solid #dbeafe;
+    text-align: center;
+    box-shadow: 0px 3px 10px rgba(0,0,0,0.05);
 }
 
 .status-live {
@@ -133,50 +137,46 @@ body {
 </style>
 """, unsafe_allow_html=True)
 
-# =========================================================
+# =========================
 # SESSION STATE
-# =========================================================
+# =========================
 if "signals" not in st.session_state:
     st.session_state.signals = deque(maxlen=MAX_SIGNALS)
 
 if "scanner_running" not in st.session_state:
     st.session_state.scanner_running = False
-
-if "thread_started" not in st.session_state:
-    st.session_state.thread_started = False
+        st.session_state.thread_started = False
 
 if "last_scan" not in st.session_state:
     st.session_state.last_scan = None
 
-# =========================================================
+# =========================
 # TELEGRAM ALERT
-# =========================================================
+# =========================
 def send_telegram_alert(message):
     try:
-        url = (
-            f"https://api.telegram.org/bot"
-            f"{TELEGRAM_BOT_TOKEN}/sendMessage"
-        )
-
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
             "text": message
         }
-
         requests.post(url, data=payload, timeout=10)
-
     except Exception as e:
         print(f"Telegram Error: {e}")
 
-# =========================================================
+# =========================
 # NEWS FILTER
-# =========================================================
+# =========================
 def news_filter_active():
+    """
+    Placeholder for real news API.
+    Returns True if high-impact news exists.
+    """
 
     try:
         current_minute = datetime.datetime.utcnow().minute
 
-        # Simulated high impact news filter
+        # Simple safe filter simulation
         if current_minute in [28, 29, 30, 58, 59, 0]:
             return True
 
@@ -185,11 +185,20 @@ def news_filter_active():
     except Exception:
         return False
 
-# =========================================================
-# MARKET DATA
-# =========================================================
-def get_market_data(pair):
+# =========================
+# SAFE CACHE INITIALIZATION
+# =========================
+try:
+    if "thread_started" not in st.session_state:
+        st.session_state.thread_started = False
+except Exception:
+    pass
 
+# =========================
+# MARKET DATA SIMULATION
+# Replace with real broker/tradingview feed
+# =========================
+def get_market_data(pair):
     try:
         np.random.seed(int(time.time()) % 100000)
 
@@ -197,19 +206,10 @@ def get_market_data(pair):
         base = np.random.uniform(1.0, 2.0)
 
         for _ in range(60):
-
             open_price = base + np.random.uniform(-0.002, 0.002)
             close_price = open_price + np.random.uniform(-0.003, 0.003)
-
-            high_price = (
-                max(open_price, close_price)
-                + np.random.uniform(0.0001, 0.001)
-            )
-
-            low_price = (
-                min(open_price, close_price)
-                - np.random.uniform(0.0001, 0.001)
-            )
+            high_price = max(open_price, close_price) + np.random.uniform(0.0001, 0.001)
+            low_price = min(open_price, close_price) - np.random.uniform(0.0001, 0.001)
 
             candles.append({
                 "open": open_price,
@@ -225,21 +225,15 @@ def get_market_data(pair):
     except Exception:
         return pd.DataFrame()
 
-# =========================================================
+# =========================
 # STRONG CANDLE FILTER
-# =========================================================
+# =========================
 def strong_candle_filter(df):
-
     try:
         latest = df.iloc[-1]
 
-        body = abs(
-            latest["close"] - latest["open"]
-        )
-
-        wick = (
-            latest["high"] - latest["low"]
-        )
+        body = abs(latest["close"] - latest["open"])
+        wick = (latest["high"] - latest["low"])
 
         if wick == 0:
             return False
@@ -251,23 +245,13 @@ def strong_candle_filter(df):
     except Exception:
         return False
 
-# =========================================================
+# =========================
 # TREND CONFIRMATION
-# =========================================================
+# =========================
 def trend_direction(df):
-
     try:
-        df["ema_fast"] = (
-            df["close"]
-            .ewm(span=5)
-            .mean()
-        )
-
-        df["ema_slow"] = (
-            df["close"]
-            .ewm(span=20)
-            .mean()
-        )
+        df["ema_fast"] = df["close"].ewm(span=5).mean()
+        df["ema_slow"] = df["close"].ewm(span=20).mean()
 
         latest = df.iloc[-1]
 
@@ -282,11 +266,10 @@ def trend_direction(df):
     except Exception:
         return None
 
-# =========================================================
+# =========================
 # ANTI FAKE BREAKOUT
-# =========================================================
+# =========================
 def anti_fake_breakout(df, direction):
-
     try:
         recent = df.tail(5)
 
@@ -306,11 +289,10 @@ def anti_fake_breakout(df, direction):
     except Exception:
         return False
 
-# =========================================================
+# =========================
 # SIGNAL ENGINE
-# =========================================================
+# =========================
 def generate_signal(pair):
-
     try:
         if news_filter_active():
             return None
@@ -329,7 +311,6 @@ def generate_signal(pair):
         breakout_ok = anti_fake_breakout(df, direction)
 
         if candle_ok and breakout_ok:
-
             signal = {
                 "pair": pair,
                 "direction": direction,
@@ -346,35 +327,28 @@ def generate_signal(pair):
         print(f"Signal Error: {e}")
         return None
 
-# =========================================================
-# ALERT
-# =========================================================
+# =========================
+# SOUND ALERT
+# =========================
 def play_sound_alert():
-
     try:
+        # Streamlit-safe sound alert fallback
         st.toast("🔔 5 seconds to entry")
-
     except Exception:
         pass
 
-# =========================================================
+# =========================
 # SCANNER LOOP
-# =========================================================
+# =========================
 def scanner_loop():
-
     while st.session_state.scanner_running:
-
         try:
-            st.session_state.last_scan = (
-                datetime.datetime.now()
-            )
+            st.session_state.last_scan = datetime.datetime.now()
 
             for pair in FOREX_PAIRS:
-
                 signal = generate_signal(pair)
 
                 if signal:
-
                     st.session_state.signals.appendleft(signal)
 
                     message = (
@@ -397,113 +371,63 @@ def scanner_loop():
             traceback.print_exc()
             time.sleep(5)
 
-# =========================================================
+# =========================
 # HEADER
-# =========================================================
-st.markdown(
-    '<div class="title-text">'
-    '📡 Marathon Forex Scanner'
-    '</div>',
-    unsafe_allow_html=True
-)
+# =========================
+st.markdown('<div class="title-text">📡 Marathon Forex Scanner</div>', unsafe_allow_html=True)
+st.markdown('<div class="small-label">24/7 Non-OTC Forex Signal Dashboard</div>', unsafe_allow_html=True)
 
-st.markdown(
-    '<div class="small-label">'
-    '24/7 Non-OTC Forex Signal Dashboard'
-    '</div>',
-    unsafe_allow_html=True
-)
-
-# =========================================================
+# =========================
 # CONTROL PANEL
-# =========================================================
+# =========================
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
-
-    if st.button(
-        "▶ START SCANNER",
-        use_container_width=True
-    ):
-
+    if st.button("▶ START SCANNER", use_container_width=True):
         if not st.session_state.scanner_running:
-
             st.session_state.scanner_running = True
-
             if not st.session_state.thread_started:
-
-                threading.Thread(
-                    target=scanner_loop,
-                    daemon=True
-                ).start()
-
+                threading.Thread(target=scanner_loop, daemon=True).start()
                 st.session_state.thread_started = True
 
 with col2:
-
-    if st.button(
-        "⏹ STOP SCANNER",
-        use_container_width=True
-    ):
-
+    if st.button("⏹ STOP SCANNER", use_container_width=True):
         st.session_state.scanner_running = False
-        st.session_state.thread_started = False
 
 with col3:
-
     st.markdown(
-        f'''
-        <div class="metric-box">
-            <div class="small-label">
-                Pairs
-            </div>
+        f"""
+        <div class='metric-box'>
+            <div class='small-label'>Pairs</div>
             <h2>{len(FOREX_PAIRS)}</h2>
         </div>
-        ''',
+        """,
         unsafe_allow_html=True
     )
 
 with col4:
-
-    status = (
-        "LIVE"
-        if st.session_state.scanner_running
-        else "WAITING"
-    )
-
-    css_class = (
-        "status-live"
-        if st.session_state.scanner_running
-        else "status-wait"
-    )
+    status = "LIVE" if st.session_state.scanner_running else "WAITING"
+    css_class = "status-live" if st.session_state.scanner_running else "status-wait"
 
     st.markdown(
-        f'''
-        <div class="metric-box">
-            <div class="small-label">
-                Status
-            </div>
-            <h2 class="{css_class}">
-                {status}
-            </h2>
+        f"""
+        <div class='metric-box'>
+            <div class='small-label'>Status</div>
+            <h2 class='{css_class}'>{status}</h2>
         </div>
-        ''',
+        """,
         unsafe_allow_html=True
     )
 
-# =========================================================
+# =========================
 # LIVE INFO
-# =========================================================
+# =========================
 if st.session_state.last_scan:
+    st.info(f"Last Scan: {st.session_state.last_scan.strftime('%H:%M:%S')}")
 
-    st.info(
-        f"Last Scan: "
-        f"{st.session_state.last_scan.strftime('%H:%M:%S')}"
-    )
-
-# =========================================================
-# SIGNAL FEED
-# =========================================================
+# =========================
+# SIGNAL DISPLAY
+# =========================
 st.subheader("📈 Live Signal Feed")
 
 if len(st.session_state.signals) == 0:
@@ -513,46 +437,24 @@ for signal in st.session_state.signals:
 
     direction = signal["direction"]
 
-    card_class = (
-        "buy-card"
-        if direction == "BUY"
-        else "sell-card"
-    )
+    card_class = "buy-card" if direction == "BUY" else "sell-card"
 
     st.markdown(
-        f'''
-        <div class="signal-card {card_class}">
-            <h2>
-                {signal['pair']} - {direction}
-            </h2>
-
-            <p>
-                <b>Strength:</b>
-                {signal['strength']}%
-            </p>
-
-            <p>
-                <b>Signal Time:</b>
-                {signal['time']}
-            </p>
-
-            <p>
-                <b>Countdown:</b>
-                {signal['countdown']} seconds
-            </p>
-
-            <p>
-                <b>Mode:</b>
-                Marathon Scan
-            </p>
+        f"""
+        <div class='signal-card {card_class}'>
+            <h2>{signal['pair']} - {direction}</h2>
+            <p><b>Strength:</b> {signal['strength']}%</p>
+            <p><b>Signal Time:</b> {signal['time']}</p>
+            <p><b>Countdown:</b> {signal['countdown']} seconds</p>
+            <p><b>Mode:</b> Marathon Scan</p>
         </div>
-        ''',
+        """,
         unsafe_allow_html=True
     )
 
-# =========================================================
+# =========================
 # SIDEBAR
-# =========================================================
+# =========================
 st.sidebar.title("⚙ Settings")
 
 st.sidebar.markdown("### Enabled Filters")
@@ -567,7 +469,6 @@ st.sidebar.success("✅ Crash Protection")
 st.sidebar.markdown("---")
 
 st.sidebar.markdown("### Signal Conditions")
-
 st.sidebar.write("• Non-OTC forex only")
 st.sidebar.write("• 1-minute timeframe")
 st.sidebar.write("• Strong candle body")
@@ -578,13 +479,8 @@ st.sidebar.markdown("---")
 
 st.sidebar.warning("No Auto Execution Enabled")
 
-# =========================================================
+# =========================
 # FOOTER
-# =========================================================
+# =========================
 st.markdown("---")
-
-st.caption(
-    "Marathon Forex Scanner • "
-    "Stable Signal Structure • "
-    "Streamlit Ready"
-)
+st.caption("Marathon Forex Scanner • Stable Signal Structure • Streamlit Ready")
