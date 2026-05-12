@@ -7,7 +7,7 @@ import time
 import datetime
 import traceback
 from collections import deque
-from plyer import notification
+# plyer removed to avoid Streamlit cloud module errors
 
 # =========================================================
 # MARATHON FOREX SIGNAL DASHBOARD
@@ -145,6 +145,7 @@ if "signals" not in st.session_state:
 
 if "scanner_running" not in st.session_state:
     st.session_state.scanner_running = False
+        st.session_state.thread_started = False
 
 if "last_scan" not in st.session_state:
     st.session_state.last_scan = None
@@ -183,6 +184,15 @@ def news_filter_active():
 
     except Exception:
         return False
+
+# =========================
+# SAFE CACHE INITIALIZATION
+# =========================
+try:
+    if "thread_started" not in st.session_state:
+        st.session_state.thread_started = False
+except Exception:
+    pass
 
 # =========================
 # MARKET DATA SIMULATION
@@ -322,11 +332,8 @@ def generate_signal(pair):
 # =========================
 def play_sound_alert():
     try:
-        notification.notify(
-            title="New Forex Signal",
-            message="5 seconds to entry",
-            timeout=5
-        )
+        # Streamlit-safe sound alert fallback
+        st.toast("🔔 5 seconds to entry")
     except Exception:
         pass
 
@@ -379,7 +386,9 @@ with col1:
     if st.button("▶ START SCANNER", use_container_width=True):
         if not st.session_state.scanner_running:
             st.session_state.scanner_running = True
-            threading.Thread(target=scanner_loop, daemon=True).start()
+            if not st.session_state.thread_started:
+                threading.Thread(target=scanner_loop, daemon=True).start()
+                st.session_state.thread_started = True
 
 with col2:
     if st.button("⏹ STOP SCANNER", use_container_width=True):
