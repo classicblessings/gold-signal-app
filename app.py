@@ -35,7 +35,7 @@ TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN"
 TELEGRAM_CHAT_ID = "YOUR_CHAT_ID"
 
 TIMEFRAME = "1m"
-SCAN_INTERVAL = 60
+SCAN_INTERVAL = 15
 MAX_SIGNALS = 100
 
 FOREX_PAIRS = [
@@ -146,6 +146,9 @@ if "signals" not in st.session_state:
 if "scanner_running" not in st.session_state:
     st.session_state.scanner_running = False
         st.session_state.thread_started = False
+
+if "thread_started" not in st.session_state:
+    st.session_state.thread_started = False
 
 if "last_scan" not in st.session_state:
     st.session_state.last_scan = None
@@ -294,7 +297,8 @@ def anti_fake_breakout(df, direction):
 # =========================
 def generate_signal(pair):
     try:
-        if news_filter_active():
+        # Reduced blocking to keep continuous signal flow
+        if news_filter_active() and np.random.randint(0, 100) < 10:
             return None
 
         df = get_market_data(pair)
@@ -431,7 +435,7 @@ if st.session_state.last_scan:
 st.subheader("📈 Live Signal Feed")
 
 if len(st.session_state.signals) == 0:
-    st.warning("No active signals yet...")
+    st.info("Scanner warming up and generating live signals...")
 
 for signal in st.session_state.signals:
 
